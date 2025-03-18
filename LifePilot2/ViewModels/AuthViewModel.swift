@@ -1,13 +1,5 @@
-//
-//  AuthViewModel.swift
-//  LifePilot2
-//
-//  Created by mohamed reda oumahdi on 17/03/2025.
-//
-
 import Foundation
 import SwiftUI
-import Firebase
 import Combine
 import FirebaseAuth
 
@@ -34,7 +26,7 @@ class AuthViewModel: ObservableObject {
         
         // Add notification observer for deleted accounts
         NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("UserAccountDeleted"),
+            forName: NSNotification.Name(AppConfig.App.Notifications.userAccountDeleted),
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -42,13 +34,14 @@ class AuthViewModel: ObservableObject {
             self?.authState = .unauthenticated
             self?.isAuthenticated = false
             self?.currentUser = nil
-            self?.error = AuthError.accountNotFound
+            self?.error = .accountNotFound
         }
     }
 
     // Add deinit to remove observer
     deinit {
         NotificationCenter.default.removeObserver(self)
+        cancellables.forEach { $0.cancel() }
     }
     
     private func checkInitialAuthState() {
@@ -85,7 +78,6 @@ class AuthViewModel: ObservableObject {
             .store(in: &cancellables)
     }
     
-    // Update the signIn method in AuthViewModel
     func signIn(email: String, password: String) {
         self.authState = .authenticating
         self.error = nil
@@ -100,46 +92,30 @@ class AuthViewModel: ObservableObject {
                     if case .failure(let serviceError) = completion {
                         self?.authState = .unauthenticated
                         
-                        // Check if it's a Firebase error with a specific code
-                        if let nsError = serviceError as? NSError {
-                            let errorCode = nsError.code
-                            let errorDomain = nsError.domain
-                            print("Firebase auth error - Code: \(errorCode), Domain: \(errorDomain), Description: \(nsError.localizedDescription)")
-                            
-                            switch errorCode {
-                            case 17004: // Malformed credentials
-                                self?.error = .invalidCredentials
-                            case 17005: // User not found
-                                self?.error = .accountNotFound
-                            case 17009: // Wrong password
-                                self?.error = .invalidCredentials
-                            case 17020: // Network error
-                                self?.error = .networkError
-                            case 17026: // Password is too weak
-                                self?.error = .weakPassword
-                            case 17007: // Email already in use
-                                self?.error = .emailAlreadyInUse
-                            default:
-                                self?.error = .unknown("Error \(errorCode): \(nsError.localizedDescription)")
-                            }
-                        } else {
-                            // Handle FirebaseServiceError
-                            switch serviceError {
-                            case .authenticationError:
-                                self?.error = .invalidCredentials
-                            case .documentNotFound:
-                                self?.error = .accountNotFound
-                            case .fetchError:
-                                self?.error = .networkError
-                            default:
-                                self?.error = .unknown(serviceError.localizedDescription)
-                            }
+                        // Map service errors to auth errors for the UI
+                        switch serviceError {
+                        case .authenticationError:
+                            self?.error = .invalidCredentials
+                        case .documentNotFound:
+                            self?.error = .accountNotFound
+                        case .fetchError:
+                            self?.error = .networkError
+                        default:
+                            self?.error = .unknown(serviceError.localizedDescription)
                         }
                     }
                 },
                 receiveValue: { [weak self] user in
                     self?.currentUser = user
                     self?.authState = .authenticated
+                    self?.isAuthenticated = true
+                    
+                    // Ensure onboarding flag is set correctly based on user profile
+                    if user.onboardingCompleted {
+                        UserDefaults.standard.set(true, forKey: AppConfig.App.UserDefaults.hasCompletedOnboarding)
+                    } else {
+                        UserDefaults.standard.set(false, forKey: AppConfig.App.UserDefaults.hasCompletedOnboarding)
+                    }
                 }
             )
             .store(in: &cancellables)
@@ -157,16 +133,13 @@ class AuthViewModel: ObservableObject {
                         self?.authState = .unauthenticated
                         self?.isAuthenticated = false
                         
-                        if let firebaseError = error as? FirebaseServiceError {
-                            switch firebaseError {
-                            case .authenticationError:
-                                self?.error = .invalidCredentials
-                            case .fetchError:
-                                self?.error = .networkError
-                            default:
-                                self?.error = .unknown(firebaseError.localizedDescription)
-                            }
-                        } else {
+                        // Map service errors to auth errors for the UI
+                        switch error {
+                        case .authenticationError:
+                            self?.error = .emailAlreadyInUse
+                        case .fetchError:
+                            self?.error = .networkError
+                        default:
                             self?.error = .unknown(error.localizedDescription)
                         }
                     }
@@ -175,6 +148,9 @@ class AuthViewModel: ObservableObject {
                     self?.currentUser = user
                     self?.authState = .authenticated
                     self?.isAuthenticated = true
+                    
+                    // New users need to complete onboarding
+                    UserDefaults.standard.set(false, forKey: AppConfig.App.UserDefaults.hasCompletedOnboarding)
                 }
             )
             .store(in: &cancellables)
@@ -201,7 +177,7 @@ class AuthViewModel: ObservableObject {
                     self?.authState = .unauthenticated
                     self?.isAuthenticated = false
                     
-                    // Optionally clear any cached data here
+                    // Clear any cached data
                     self?.clearUserCache()
                 }
             )
@@ -210,12 +186,15 @@ class AuthViewModel: ObservableObject {
 
     // Helper method to clear any cached user data on sign out
     private func clearUserCache() {
-        // Clear any cached user data, preferences, etc.
-        // This is a good place to reset any user-specific state
+        // Reset onboarding status to ensure clean state for next login
+        UserDefaults.standard.removeObject(forKey: AppConfig.App.UserDefaults.hasCompletedOnboarding)
         
-        // Example: You might want to clear sensitive data from UserDefaults
-        // UserDefaults.standard.removeObject(forKey: "user_preferences")
+        // Cancel any pending analysis generation
+        UserDefaults.standard.removeObject(forKey: AppConfig.App.UserDefaults.analysisGenerationInProgress)
+        UserDefaults.standard.removeObject(forKey: AppConfig.App.UserDefaults.analysisGenerationStartTime)
+        UserDefaults.standard.removeObject(forKey: AppConfig.App.UserDefaults.pendingAnalysisUserId)
         
+        // Clear other cached data if needed
         print("User cache cleared during sign out")
     }
     
@@ -231,6 +210,9 @@ class AuthViewModel: ObservableObject {
                     self?.isAuthenticated = false
                     self?.currentUser = nil
                     self?.authState = .unauthenticated
+                    
+                    // Clear cached data
+                    self?.clearUserCache()
                 }
             })
             .store(in: &cancellables)

@@ -27,12 +27,30 @@ struct CohereGenerateResponse: Decodable {
     }
 }
 
-enum CohereServiceError: Error {
+enum CohereServiceError: Error, LocalizedError {
     case invalidURL
     case networkError(Error)
     case decodingError(Error)
     case apiError(String)
+    case rateLimitExceeded
     case unknownError
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "Invalid API URL"
+        case .networkError(let error):
+            return "Network error: \(error.localizedDescription)"
+        case .decodingError(let error):
+            return "Error decoding response: \(error.localizedDescription)"
+        case .apiError(let message):
+            return "API error: \(message)"
+        case .rateLimitExceeded:
+            return "API rate limit exceeded. Please try again later."
+        case .unknownError:
+            return "An unknown error occurred"
+        }
+    }
 }
 
 // MARK: - Cohere API Service
@@ -42,6 +60,8 @@ protocol CohereServiceProtocol {
 
 class CohereService: CohereServiceProtocol {
     private let session: URLSession
+    private let decoder = JSONDecoder()
+    private let encoder = JSONEncoder()
     
     init(session: URLSession = .shared) {
         self.session = session
@@ -51,6 +71,8 @@ class CohereService: CohereServiceProtocol {
         guard let url = URL(string: AppConfig.Cohere.baseURL) else {
             return Fail(error: CohereServiceError.invalidURL).eraseToAnyPublisher()
         }
+        
+        AppConfig.Debug.log("Generating analysis for user: \(userProfile.id)")
         
         // Create the prompt based on user profile information
         let prompt = createPromptForUserAnalysis(userProfile: userProfile)
@@ -70,37 +92,74 @@ class CohereService: CohereServiceProtocol {
         request.addValue("Bearer \(AppConfig.cohereAPIKey)", forHTTPHeaderField: "Authorization")
         
         do {
-            request.httpBody = try JSONEncoder().encode(requestBody)
-            print("Request URL: \(url)")
-            print("API Key: \(AppConfig.cohereAPIKey.prefix(5))...")
-            print("Model: \(AppConfig.Cohere.model)")
-            print("Max Tokens: \(AppConfig.Cohere.maxTokens)")
+            request.httpBody = try encoder.encode(requestBody)
+            AppConfig.Debug.log("Request URL: \(url)")
+            AppConfig.Debug.log("API Key: \(AppConfig.cohereAPIKey.prefix(5))...")
+            AppConfig.Debug.log("Model: \(AppConfig.Cohere.model)")
+            AppConfig.Debug.log("Max Tokens: \(AppConfig.Cohere.maxTokens)")
         } catch {
             return Fail(error: .networkError(error)).eraseToAnyPublisher()
         }
         
         return session.dataTaskPublisher(for: request)
-            .mapError { CohereServiceError.networkError($0) }
-            .map { data, response -> Data in
-                // Log the raw response to help with debugging
-                print("Response status code: \((response as? HTTPURLResponse)?.statusCode ?? 0)")
-                print("Raw response data: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
-                return data
+            .tryMap { data, response -> Data in
+                // Check for HTTP response status
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw CohereServiceError.networkError(NSError(domain: "HTTPResponse", code: 0, userInfo: nil))
+                }
+                
+                // Log response status
+                AppConfig.Debug.log("Response status code: \(httpResponse.statusCode)")
+                
+                // Check for specific status codes
+                switch httpResponse.statusCode {
+                case 200, 201:
+                    // Success, continue
+                    return data
+                case 429:
+                    throw CohereServiceError.rateLimitExceeded
+                case 400...499:
+                    // Client error
+                    let errorMessage = String(data: data, encoding: .utf8) ?? "Client error"
+                    throw CohereServiceError.apiError("Client error: \(errorMessage)")
+                case 500...599:
+                    // Server error
+                    let errorMessage = String(data: data, encoding: .utf8) ?? "Server error"
+                    throw CohereServiceError.apiError("Server error: \(errorMessage)")
+                default:
+                    throw CohereServiceError.apiError("Unexpected status code: \(httpResponse.statusCode)")
+                }
             }
-            .decode(type: CohereGenerateResponse.self, decoder: JSONDecoder())
             .mapError { error -> CohereServiceError in
-                print("Decoding error: \(error)")
-                if let decodingError = error as? DecodingError {
-                    return .decodingError(decodingError)
-                } else {
-                    return .apiError(error.localizedDescription)
+                if let cohereError = error as? CohereServiceError {
+                    return cohereError
                 }
+                return .networkError(error)
             }
-            .map { response in
-                guard let firstGeneration = response.generations.first else {
-                    return ""
+            .flatMap { data -> AnyPublisher<String, CohereServiceError> in
+                // Log the raw data response for debugging
+                AppConfig.Debug.log("Raw response data length: \(data.count) bytes")
+                if data.count < 1000 {
+                    AppConfig.Debug.log("Raw response: \(String(data: data, encoding: .utf8) ?? "Unable to decode")")
                 }
-                return firstGeneration.text
+                
+                return Just(data)
+                    .decode(type: CohereGenerateResponse.self, decoder: self.decoder)
+                    .mapError { error -> CohereServiceError in
+                        AppConfig.Debug.error("Decoding error: \(error)")
+                        if let decodingError = error as? DecodingError {
+                            return .decodingError(decodingError)
+                        } else {
+                            return .apiError(error.localizedDescription)
+                        }
+                    }
+                    .map { response in
+                        guard let firstGeneration = response.generations.first else {
+                            return ""
+                        }
+                        return firstGeneration.text
+                    }
+                    .eraseToAnyPublisher()
             }
             .eraseToAnyPublisher()
     }
@@ -109,6 +168,7 @@ class CohereService: CohereServiceProtocol {
         // Create a detailed prompt based on the user's profile information
         let sleepHabit = userProfile.sleepPreference.rawValue
         let activityLevel = userProfile.activityLevel.rawValue
+        let personalityType = userProfile.personalityType ?? "Unknown"
         let focusAreas = userProfile.focusAreas.map { $0.rawValue }.joined(separator: ", ")
         let challenges = userProfile.currentChallenges.map { $0.rawValue }.joined(separator: ", ")
         
@@ -116,14 +176,16 @@ class CohereService: CohereServiceProtocol {
         You are LifePilot, an AI lifestyle coach. Analyze the following user profile and provide personalized insights and recommendations:
         
         User Profile:
+        - Name: \(userProfile.name)
+        - Personality Type: \(personalityType)
         - Sleep Preference: \(sleepHabit)
         - Activity Level: \(activityLevel)
-        - Focus Areas: \(focusAreas)
-        - Current Challenges: \(challenges)
+        - Focus Areas: \(focusAreas.isEmpty ? "None specified" : focusAreas)
+        - Current Challenges: \(challenges.isEmpty ? "None specified" : challenges)
         
         Based on this information, generate:
-        1. Three key insights about the user's current habits and how they might impact their goals
-        2. Four actionable recommendations that are personalized to their profile
+        1. Three to five key insights about the user's current habits and how they might impact their goals
+        2. Four to six actionable recommendations that are personalized to their profile
         3. Evidence or scientific backing for why these recommendations would be effective
         
         IMPORTANT: Return ONLY a valid JSON object with NO additional text before or after. The response must be a properly formatted JSON object with the following structure:
@@ -139,60 +201,39 @@ class CohereService: CohereServiceProtocol {
           ]
         }
         
-        Ensure the JSON is valid and complete. No text should appear before or after the JSON object.
+        Ensure the JSON is valid and complete. Do not include any text before or after the JSON object.
         """
     }
 }
 
 // MARK: - Analysis Parser
 class AnalysisParser {
-    // Add the mapFocusArea function here
-    private static func mapFocusArea(_ apiArea: String) -> FocusArea {
-        let simplified = apiArea.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        if simplified.contains("sleep") {
-            return .health
-        } else if simplified.contains("activity") || simplified.contains("exercise") {
-            return .health
-        } else if simplified.contains("focus") || simplified.contains("productivity") {
-            return .productivity
-        } else if simplified.contains("work") || simplified.contains("career") {
-            return .career
-        } else if simplified.contains("relation") || simplified.contains("social") {
-            return .relationships
-        } else if simplified.contains("learn") || simplified.contains("skill") {
-            return .learning
-        } else if simplified.contains("mind") || simplified.contains("stress") {
-            return .mindfulness
-        } else if simplified.contains("financ") || simplified.contains("money") {
-            return .finance
-        } else if simplified.contains("creat") || simplified.contains("art") {
-            return .creativity
-        }
-        
-        return .health // Default to health
-    }
-    
     static func parseAnalysisResponse(_ responseText: String) -> PersonalizedAnalysis? {
-        print("Attempting to parse response text of length: \(responseText.count)")
+        AppConfig.Debug.log("Attempting to parse response text of length: \(responseText.count)")
         
-        // Step 1: Fix common JSON formatting issues
+        // Step 1: Clean the response
         var cleanedText = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Fix syntax errors in JSON that might occur in the API response
+        // Find the first '{' and last '}' to extract just the JSON part
+        guard let startIndex = cleanedText.firstIndex(of: "{"),
+              let endIndex = cleanedText.lastIndex(of: "}") else {
+            AppConfig.Debug.error("No valid JSON found in response")
+            return createFallbackAnalysis()
+        }
         
-        // Fix missing commas between array elements (e.g., "} {" should be "},{")
-        cleanedText = cleanedText.replacingOccurrences(of: "\\}\\s*\\{", with: "},{", options: .regularExpression)
+        // Extract just the JSON part
+        cleanedText = String(cleanedText[startIndex...endIndex])
         
-        // Fix JSON with extra commas before closing brackets (e.g., "[1,2,]" should be "[1,2]")
-        cleanedText = cleanedText.replacingOccurrences(of: ",\\s*\\]", with: "]", options: .regularExpression)
+        // Step 2: Fix common JSON issues
+        cleanedText = cleanedText.replacingOccurrences(of: ",\\s*}", with: "}", options: .regularExpression)
+        cleanedText = cleanedText.replacingOccurrences(of: ",\\s*]", with: "]", options: .regularExpression)
         
-        // Try direct decoding first
+        // Step 3: Parse the JSON
         do {
             let data = cleanedText.data(using: .utf8)!
             let decoder = JSONDecoder()
             
-            // Modified to use our custom decoding
+            // Use custom types to handle flexible API response formats
             struct TempInsight: Decodable {
                 let title: String
                 let description: String
@@ -208,152 +249,124 @@ class AnalysisParser {
                 let timeframe: String
             }
             
+            struct TempEvidenceLink: Decodable {
+                let title: String
+                let url: String
+                let type: String
+            }
+            
             struct TempAnalysis: Decodable {
                 let insights: [TempInsight]
                 let recommendations: [TempRecommendation]
-                let evidenceLinks: [EvidenceLink]?
+                let evidenceLinks: [TempEvidenceLink]?
             }
             
-            // Try to decode with error tolerance
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            // Attempt to decode
             let tempAnalysis = try decoder.decode(TempAnalysis.self, from: data)
             
-            // Create and convert insights
+            // Map to our model types
             let insights = tempAnalysis.insights.map { tempInsight -> Insight in
                 return Insight(
                     title: tempInsight.title,
                     description: tempInsight.description,
-                    focusArea: mapFocusArea(tempInsight.focusArea),
+                    focusArea: FocusArea.fromString(tempInsight.focusArea),
                     severity: InsightSeverity.fromString(tempInsight.severity)
                 )
             }
             
-            // Convert recommendations
             let recommendations = tempAnalysis.recommendations.map { tempRec -> Recommendation in
                 return Recommendation(
                     title: tempRec.title,
                     description: tempRec.description,
-                    focusArea: mapFocusArea(tempRec.focusArea),
+                    focusArea: FocusArea.fromString(tempRec.focusArea),
                     impact: RecommendationImpact.fromString(tempRec.impact),
                     timeframe: TimeFrame.fromString(tempRec.timeframe)
                 )
             }
             
+            var evidenceLinks: [EvidenceLink]? = nil
+            if let tempLinks = tempAnalysis.evidenceLinks {
+                evidenceLinks = tempLinks.compactMap { tempLink -> EvidenceLink? in
+                    guard let url = URL(string: tempLink.url) else {
+                        return nil
+                    }
+                    
+                    return EvidenceLink(
+                        title: tempLink.title,
+                        url: url,
+                        type: EvidenceType.fromString(tempLink.type)
+                    )
+                }
+            }
+            
             return PersonalizedAnalysis(
-                userId: UUID().uuidString,
+                id: UUID().uuidString,
+                userId: UUID().uuidString, // Will be replaced by caller
                 generatedAt: Date(),
                 insights: insights,
                 recommendations: recommendations,
-                evidenceLinks: tempAnalysis.evidenceLinks
+                evidenceLinks: evidenceLinks
             )
         } catch {
-            print("Direct parsing failed: \(error)")
-            
-            // Second attempt: Manual JSON fixing for more serious issues
-            do {
-                // Try to extract valid JSON
-                guard let jsonStartIndex = cleanedText.firstIndex(of: "{"),
-                      let jsonEndIndex = cleanedText.lastIndex(of: "}") else {
-                    print("No JSON content found in response")
-                    return nil
-                }
-                
-                let jsonContent = String(cleanedText[jsonStartIndex...jsonEndIndex])
-                print("Extracted JSON content prefix: \(jsonContent.prefix(100))...")
-                
-                // Additional manual fixes for extracted JSON
-                var fixedJSON = jsonContent
-                
-                // Fix the specific issue in your logs - unexpected character in array
-                if let range = fixedJSON.range(of: "\"severity\": \"Positive\"\\s*}\\s*\\{", options: .regularExpression) {
-                    fixedJSON = fixedJSON.replacingCharacters(in: range, with: "\"severity\": \"Positive\"},{ ")
-                }
-                
-                // Try to decode the fixed JSON
-                let fixedData = fixedJSON.data(using: .utf8)!
-                let decoder = JSONDecoder()
-                
-                // Use the same temp structures for consistent handling
-                struct TempInsight: Decodable {
-                    let title: String
-                    let description: String
-                    let focusArea: String
-                    let severity: String
-                }
-                
-                struct TempRecommendation: Decodable {
-                    let title: String
-                    let description: String
-                    let focusArea: String
-                    let impact: String
-                    let timeframe: String
-                }
-                
-                struct TempAnalysis: Decodable {
-                    let insights: [TempInsight]
-                    let recommendations: [TempRecommendation]
-                    let evidenceLinks: [EvidenceLink]?
-                }
-                
-                decoder.keyDecodingStrategy = .convertFromSnakeCase
-                let tempAnalysis = try decoder.decode(TempAnalysis.self, from: fixedData)
-                
-                // Process and return data as before
-                let insights = tempAnalysis.insights.map { tempInsight -> Insight in
-                    return Insight(
-                        title: tempInsight.title,
-                        description: tempInsight.description,
-                        focusArea: mapFocusArea(tempInsight.focusArea),
-                        severity: InsightSeverity.fromString(tempInsight.severity)
-                    )
-                }
-                
-                let recommendations = tempAnalysis.recommendations.map { tempRec -> Recommendation in
-                    return Recommendation(
-                        title: tempRec.title,
-                        description: tempRec.description,
-                        focusArea: mapFocusArea(tempRec.focusArea),
-                        impact: RecommendationImpact.fromString(tempRec.impact),
-                        timeframe: TimeFrame.fromString(tempRec.timeframe)
-                    )
-                }
-                
-                return PersonalizedAnalysis(
-                    userId: UUID().uuidString,
-                    generatedAt: Date(),
-                    insights: insights,
-                    recommendations: recommendations,
-                    evidenceLinks: tempAnalysis.evidenceLinks
-                )
-            } catch {
-                // Final fallback: Create a minimal valid analysis
-                print("Error parsing extracted JSON: \(error)")
-                print("Creating a fallback minimal analysis")
-                
-                // Create a minimal valid analysis
-                let insight = Insight(
-                    title: "Default Insight",
-                    description: "We couldn't generate a complete analysis. Please try again later.",
-                    focusArea: .productivity,
-                    severity: .neutral
-                )
-                
-                let recommendation = Recommendation(
-                    title: "Try Again Later",
-                    description: "Our system is experiencing temporary issues. Please try generating a new analysis in a few minutes.",
-                    focusArea: .productivity,
-                    impact: .medium,
-                    timeframe: .immediate
-                )
-                
-                return PersonalizedAnalysis(
-                    userId: UUID().uuidString,
-                    generatedAt: Date(),
-                    insights: [insight],
-                    recommendations: [recommendation],
-                    evidenceLinks: []
-                )
-            }
+            AppConfig.Debug.error("Error parsing analysis JSON: \(error)")
+            return createFallbackAnalysis()
         }
+    }
+    
+    // Create a fallback analysis for when parsing fails
+    private static func createFallbackAnalysis() -> PersonalizedAnalysis {
+        AppConfig.Debug.log("Creating fallback analysis")
+        
+        // Create some default insights
+        let insights = [
+            Insight(
+                title: "System Generated Insight",
+                description: "We couldn't process your personalized insights. This is a system-generated placeholder. Please try regenerating your analysis.",
+                focusArea: .productivity,
+                severity: .neutral
+            ),
+            Insight(
+                title: "Default Health Recommendation",
+                description: "Regular physical activity is important for overall well-being. Consider incorporating at least 30 minutes of moderate exercise into your daily routine.",
+                focusArea: .health,
+                severity: .neutral
+            )
+        ]
+        
+        // Create some default recommendations
+        let recommendations = [
+            Recommendation(
+                title: "Try Again Later",
+                description: "Our system encountered an issue generating your personalized recommendations. Please try again in a few minutes.",
+                focusArea: .productivity,
+                impact: .medium,
+                timeframe: .immediate
+            ),
+            Recommendation(
+                title: "Start a Daily Reflection Practice",
+                description: "Spend 5 minutes each evening reflecting on your day and setting intentions for tomorrow.",
+                focusArea: .mindfulness,
+                impact: .medium,
+                timeframe: .shortTerm
+            )
+        ]
+        
+        // Create a default evidence link
+        let evidenceLinks = [
+            EvidenceLink(
+                title: "The Benefits of Mindfulness",
+                url: URL(string: "https://www.health.harvard.edu/blog/mindfulness-meditation-may-ease-anxiety-mental-stress-201401086967")!,
+                type: .article
+            )
+        ]
+        
+        return PersonalizedAnalysis(
+            id: UUID().uuidString,
+            userId: UUID().uuidString, // Will be replaced by caller
+            generatedAt: Date(),
+            insights: insights,
+            recommendations: recommendations,
+            evidenceLinks: evidenceLinks
+        )
     }
 }

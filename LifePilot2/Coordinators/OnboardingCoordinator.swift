@@ -1,55 +1,6 @@
 import Foundation
 import Combine
 
-// MARK: - Onboarding Step
-enum OnboardingStep: Int, CaseIterable {
-    case welcome
-    case personalityQuestions
-    case lifestyleQuestions
-    case goalsQuestions
-    case profileSummary
-    case confirmation
-    case complete
-    
-    var title: String {
-        switch self {
-        case .welcome:
-            return "Welcome to LifePilot"
-        case .personalityQuestions:
-            return "About You"
-        case .lifestyleQuestions:
-            return "Your Lifestyle"
-        case .goalsQuestions:
-            return "Your Goals"
-        case .profileSummary:
-            return "Profile Summary"
-        case .confirmation:
-            return "Confirmation"
-        case .complete:
-            return "All Set!"
-        }
-    }
-    
-    var description: String {
-        switch self {
-        case .welcome:
-            return "Let's get started building your personalized life transformation plan."
-        case .personalityQuestions:
-            return "Tell us a bit about your personality and preferences."
-        case .lifestyleQuestions:
-            return "Help us understand your current lifestyle and habits."
-        case .goalsQuestions:
-            return "What areas of your life would you like to improve?"
-        case .profileSummary:
-            return "Here's what we've learned about you so far."
-        case .confirmation:
-            return "Please confirm that these changes align with your goals."
-        case .complete:
-            return "Your profile is set up and ready to go!"
-        }
-    }
-}
-
 // MARK: - Onboarding Coordinator
 class OnboardingCoordinator: ObservableObject {
     // Published properties
@@ -65,8 +16,6 @@ class OnboardingCoordinator: ObservableObject {
     private var analysisViewModel: PersonalizedAnalysisViewModel?
     private var analysisTimeoutTimer: Timer?
 
-
-    
     // Cancellables
     private var cancellables = Set<AnyCancellable>()
     
@@ -87,6 +36,21 @@ class OnboardingCoordinator: ObservableObject {
         
         self.authService = authService
         self.databaseService = databaseService
+        
+        // Subscribe to user profile updates
+        authService.currentUser
+            .compactMap { $0 }
+            .sink { [weak self] user in
+                // Update the user ID and email from auth service
+                self?.userProfile.id = user.id
+                self?.userProfile.email = user.email
+            }
+            .store(in: &cancellables)
+    }
+    
+    deinit {
+        analysisTimeoutTimer?.invalidate()
+        cancellables.forEach { $0.cancel() }
     }
     
     // MARK: - Navigation Methods
@@ -125,17 +89,16 @@ class OnboardingCoordinator: ObservableObject {
             
         case .personalityQuestions:
             // Ensure personality questions are answered
-            // For example: ensure the user has selected a sleep preference
-            if userProfile.sleepPreference == .neutral && userProfile.personalityType == nil {
-                self.error = "Please complete all personality questions before proceeding."
+            if userProfile.personalityType == nil {
+                self.error = "Please select a personality type before proceeding."
                 return false
             }
             return true
             
         case .lifestyleQuestions:
             // Example validation: ensure activity level is set
-            if userProfile.activityLevel == .moderate {
-                self.error = "Please indicate your activity level before proceeding."
+            if userProfile.activityLevel == .moderate && userProfile.currentChallenges.isEmpty {
+                self.error = "Please select your activity level and at least one challenge before proceeding."
                 return false
             }
             return true
@@ -154,7 +117,7 @@ class OnboardingCoordinator: ObservableObject {
         }
     }
     
-    // Enhanced analysis generation method
+    // Enhanced completion method with analysis generation
     func completeOnboardingAndGenerateAnalysis() {
         isLoading = true
         error = nil
@@ -169,10 +132,14 @@ class OnboardingCoordinator: ObservableObject {
                 receiveCompletion: { [weak self] completion in
                     if case .failure(let error) = completion {
                         self?.error = "Failed to save profile: \(error.localizedDescription)"
-                        print("❌ Failed to save profile: \(error.localizedDescription)")
+                        AppConfig.Debug.error("Failed to save profile: \(error.localizedDescription)")
                         self?.isLoading = false
                     } else {
-                        print("✅ User profile saved with onboardingCompleted = true")
+                        AppConfig.Debug.success("User profile saved with onboardingCompleted = true")
+                        
+                        // Set the onboarding flag in UserDefaults
+                        UserDefaults.standard.set(true, forKey: AppConfig.App.UserDefaults.hasCompletedOnboarding)
+                        
                         // Now start analysis generation
                         self?.generateAnalysisAndWait()
                     }
@@ -184,7 +151,7 @@ class OnboardingCoordinator: ObservableObject {
 
     // Enhanced analysis generation with improved waiting
     private func generateAnalysisAndWait() {
-        print("Starting initial analysis generation for user: \(userProfile.id)")
+        AppConfig.Debug.log("Starting initial analysis generation for user: \(userProfile.id)")
         isGeneratingAnalysis = true
         
         // Create a new ViewModel with retained reference
@@ -195,32 +162,35 @@ class OnboardingCoordinator: ObservableObject {
         analysisVM.setUserId(userProfile.id)
         analysisVM.setUserProfile(userProfile)
         
-        // Set a timeout - proceed after 45 seconds even if analysis isn't complete
-        analysisTimeoutTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: false) { [weak self] _ in
-            print("Analysis generation timeout reached - proceeding anyway")
+        // Set a timeout - proceed after 3 minutes even if analysis isn't complete
+        analysisTimeoutTimer = Timer.scheduledTimer(withTimeInterval: AppConfig.UI.analysisGenerationTimeout, repeats: false) { [weak self] _ in
+            AppConfig.Debug.log("Analysis generation timeout reached - proceeding anyway")
             
             // Store the fact that generation was started but not confirmed complete
-            UserDefaults.standard.set(true, forKey: "analysisGenerationInProgress")
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "analysisGenerationStartTime")
-            UserDefaults.standard.set(self?.userProfile.id, forKey: "pendingAnalysisUserId")
+            UserDefaults.standard.set(true, forKey: AppConfig.App.UserDefaults.analysisGenerationInProgress)
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: AppConfig.App.UserDefaults.analysisGenerationStartTime)
+            UserDefaults.standard.set(self?.userProfile.id, forKey: AppConfig.App.UserDefaults.pendingAnalysisUserId)
             
+            // Cleanup
             self?.isGeneratingAnalysis = false
+            self?.isLoading = false
             self?.analysisViewModel = nil
             self?.analysisTimeoutTimer = nil
+            
+            // Post notification that analysis is complete
+            NotificationCenter.default.post(name: NSNotification.Name(AppConfig.App.Notifications.analysisComplete), object: nil)
         }
         
         // Generate analysis - this kicks off the API call
         analysisVM.generateAnalysis()
         
         // Monitor for completion
-        // In generateAnalysisAndWait method in OnboardingCoordinator.swift
-        // In OnboardingCoordinator.swift, in the generateAnalysisAndWait method
         Publishers.CombineLatest(analysisVM.$isLoading, analysisVM.$analysis)
             .sink { [weak self] (isLoading, analysis) in
                 // Only consider complete when loading is false AND we have an analysis
                 if !isLoading {
                     if analysis != nil {
-                        print("✅ Analysis generation successfully completed!")
+                        AppConfig.Debug.success("Analysis generation successfully completed!")
                         guard let self = self else { return }
                         
                         // Make one final update to ensure the user profile is properly saved
@@ -229,23 +199,26 @@ class OnboardingCoordinator: ObservableObject {
                             .sink(
                                 receiveCompletion: { completion in
                                     if case .failure(let error) = completion {
-                                        print("⚠️ Failed to ensure onboardingCompleted flag: \(error)")
+                                        AppConfig.Debug.error("Failed to ensure onboardingCompleted flag: \(error)")
                                     } else {
-                                        print("✅ Confirmed user profile onboardingCompleted = true")
+                                        AppConfig.Debug.success("Confirmed user profile onboardingCompleted = true")
                                     }
                                     
                                     // Finalize completion
                                     self.isGeneratingAnalysis = false
+                                    self.isLoading = false
                                     self.analysisViewModel = nil
+                                    self.analysisTimeoutTimer?.invalidate()
+                                    self.analysisTimeoutTimer = nil
                                     
                                     // Post notification that analysis is complete
-                                    NotificationCenter.default.post(name: NSNotification.Name("AnalysisComplete"), object: nil)
+                                    NotificationCenter.default.post(name: NSNotification.Name(AppConfig.App.Notifications.analysisComplete), object: nil)
                                 },
                                 receiveValue: { _ in }
                             )
                             .store(in: &self.cancellables)
                     } else {
-                        print("⚠️ Analysis loading complete but no analysis was generated")
+                        AppConfig.Debug.log("Analysis loading complete but no analysis was generated")
                     }
                 }
             }
@@ -255,12 +228,16 @@ class OnboardingCoordinator: ObservableObject {
         analysisVM.$error
             .compactMap { $0 } // Only proceed if there is an error
             .sink { [weak self] errorMessage in
-                print("❌ Analysis generation encountered an error: \(errorMessage)")
+                AppConfig.Debug.error("Analysis generation encountered an error: \(errorMessage)")
                 self?.isGeneratingAnalysis = false
+                self?.isLoading = false
                 self?.analysisViewModel = nil
                 // Invalidate timeout
                 self?.analysisTimeoutTimer?.invalidate()
                 self?.analysisTimeoutTimer = nil
+                
+                // Post notification that analysis is complete (even with error)
+                NotificationCenter.default.post(name: NSNotification.Name(AppConfig.App.Notifications.analysisComplete), object: nil)
             }
             .store(in: &cancellables)
     }
@@ -351,40 +328,59 @@ class OnboardingCoordinator: ObservableObject {
                     // Successfully saved, set to complete
                     self?.currentStep = .complete
                     
-                    // Generate initial analysis with the new profile
-                    self?.generateInitialAnalysis()
+                    // Set the flag in UserDefaults
+                    UserDefaults.standard.set(true, forKey: AppConfig.App.UserDefaults.hasCompletedOnboarding)
                 }
             )
             .store(in: &cancellables)
     }
+}
 
-    // Add a method to generate initial analysis
-    private func generateInitialAnalysis() {
-        print("Starting initial analysis generation for user: \(userProfile.id)")
-        
-        // Create a PersonalizedAnalysisViewModel
-        let analysisViewModel = PersonalizedAnalysisViewModel()
-        
-        // Set user ID
-        analysisViewModel.setUserId(userProfile.id)
-        
-        // Generate analysis
-        analysisViewModel.generateAnalysis()
-        
-        // Keep a reference to the view model to prevent it from being deallocated
-        // until the analysis is complete
-        self.analysisViewModel = analysisViewModel
-        
-        // Add a subscription to know when analysis is complete
-        analysisViewModel.$analysis
-            .dropFirst() // Skip the initial nil value
-            .sink { [weak self] analysis in
-                if analysis != nil {
-                    print("Initial analysis generation completed successfully!")
-                    // We can now release the view model
-                    self?.analysisViewModel = nil
-                }
-            }
-            .store(in: &cancellables)
+// MARK: - Onboarding Step
+enum OnboardingStep: Int, CaseIterable {
+    case welcome
+    case personalityQuestions
+    case lifestyleQuestions
+    case goalsQuestions
+    case profileSummary
+    case confirmation
+    case complete
+    
+    var title: String {
+        switch self {
+        case .welcome:
+            return "Welcome to LifePilot"
+        case .personalityQuestions:
+            return "About You"
+        case .lifestyleQuestions:
+            return "Your Lifestyle"
+        case .goalsQuestions:
+            return "Your Goals"
+        case .profileSummary:
+            return "Profile Summary"
+        case .confirmation:
+            return "Confirmation"
+        case .complete:
+            return "All Set!"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .welcome:
+            return "Let's get started building your personalized life transformation plan."
+        case .personalityQuestions:
+            return "Tell us a bit about your personality and preferences."
+        case .lifestyleQuestions:
+            return "Help us understand your current lifestyle and habits."
+        case .goalsQuestions:
+            return "What areas of your life would you like to improve?"
+        case .profileSummary:
+            return "Here's what we've learned about you so far."
+        case .confirmation:
+            return "Please confirm that these changes align with your goals."
+        case .complete:
+            return "Your profile is set up and ready to go!"
+        }
     }
 }

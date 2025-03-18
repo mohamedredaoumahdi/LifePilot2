@@ -3,113 +3,60 @@ import Firebase
 import Combine
 import FirebaseAuth
 
-@main
-struct LifePilotApp: App {
-    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
-    @StateObject private var authViewModel = AuthViewModel()
-    @State private var forceRefresh = false
-    private static var firebaseConfigured = false
-
-    init() {
-        // Configure Firebase properly for SwiftUI App lifecycle
-        configureFirebase()
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // Configure Firebase
+        FirebaseApp.configure()
         
         // Verify Firebase configuration
         FirebaseConfigCheck.verifySetup()
         
-        // Verify current user token is still valid
-        verifyAuthToken()
-        
-        // Check if onboarding needs to be shown
-        checkOnboardingStatus()
+        return true
     }
+}
+
+@main
+struct LifePilot2App: App {
+    // Register app delegate for Firebase setup
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     
-    private func verifyAuthToken() {
-        // Only attempt verification if there's a current user
-        if let currentUser = Auth.auth().currentUser {
-            print("Verifying token for user: \(currentUser.email ?? "unknown")")
-            
-            // Get a new ID token to verify with the server
-            currentUser.getIDTokenForcingRefresh(true) { (idToken, error) in
-                if let error = error {
-                    print("❌ Token refresh failed, user may have been deleted: \(error.localizedDescription)")
-                    
-                    // Handle specific error cases
-                    let nsError = error as NSError
-                    if nsError.code == 17011 { // User record doesn't exist
-                        print("User account has been deleted from server")
-                        // Force sign out
-                        try? Auth.auth().signOut()
-                        
-                        // Clear any cached user data
-                        UserDefaults.standard.removeObject(forKey: "currentUser")
-                        
-                        // Post notification to update UI
-                        NotificationCenter.default.post(name: NSNotification.Name("UserAccountDeleted"), object: nil)
-                    } else {
-                        // Other token errors
-                        print("Token verification failed with code: \(nsError.code)")
-                    }
-                } else if let token = idToken {
-                    print("✅ Token verified successfully")
-                    // Optionally, you could use this token for other API calls
-                }
-            }
-        }
-    }
-    
-    private func configureFirebase() {
-        // Only configure Firebase if it hasn't been configured already
-        if !Self.firebaseConfigured && FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-            Self.firebaseConfigured = true
-            print("Firebase configured in app initialization")
-        } else {
-            print("Firebase was already configured")
-        }
-        
-        // Log authentication state for debugging
-        if let user = Auth.auth().currentUser {
-            print("Already logged in user: \(user.email ?? "unknown"), UID: \(user.uid)")
-        } else {
-            print("No user is currently logged in")
-        }
-    }
-    
-    private func checkOnboardingStatus() {
-        // Only check if onboarding is completed if we have a saved value
-        if UserDefaults.standard.object(forKey: "hasCompletedOnboarding") == nil {
-            // First-time user, make sure onboarding is shown
-            UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
-        }
-    }
+    @AppStorage(AppConfig.App.UserDefaults.hasCompletedOnboarding) private var hasCompletedOnboarding = false
+    @StateObject private var authViewModel = AuthViewModel()
+    @State private var forceRefresh = false
     
     var body: some Scene {
         WindowGroup {
-                // Debug logs
-                let _ = print("hasCompletedOnboarding: \(hasCompletedOnboarding)")
-                let _ = print("authState: \(authViewModel.authState)")
-                
-                Group {
-                    if authViewModel.authState == .initializing {
-                        LoadingView(message: "Starting LifePilot...")
-                    } else if !authViewModel.authState.isAuthenticated {
-                        // Show auth view when not authenticated, regardless of onboarding status
-                        AuthView()
-                            .environmentObject(authViewModel)
-                    } else if !hasCompletedOnboarding {
-                        // ONLY check UserDefaults for onboarding status, IGNORE profile flag
-                        OnboardingView()
-                            .environmentObject(authViewModel)
-                    } else {
-                        // Show main app when authenticated and UserDefaults says onboarding completed
-                        MainAppView()
-                            .environmentObject(authViewModel)
-                    }
+            // Debug logs
+            let _ = print("hasCompletedOnboarding: \(hasCompletedOnboarding)")
+            let _ = print("authState: \(authViewModel.authState)")
+            
+            Group {
+                if authViewModel.authState == .initializing {
+                    LoadingView(message: "Starting LifePilot...")
+                } else if !authViewModel.authState.isAuthenticated {
+                    // Show auth view when not authenticated, regardless of onboarding status
+                    AuthView()
+                        .environmentObject(authViewModel)
+                } else if !hasCompletedOnboarding {
+                    // Only check UserDefaults for onboarding status, not profile flag
+                    OnboardingView()
+                        .environmentObject(authViewModel)
+                } else {
+                    // Show main app when authenticated and UserDefaults says onboarding completed
+                    MainAppView()
+                        .environmentObject(authViewModel)
                 }
-                .animation(.spring(), value: authViewModel.authState)
-                .animation(.spring(), value: hasCompletedOnboarding)
             }
+            .animation(.spring(), value: authViewModel.authState)
+            .animation(.spring(), value: hasCompletedOnboarding)
+            // Listen for analysis completion notifications
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name(AppConfig.App.Notifications.analysisComplete))) { _ in
+                print("Received AnalysisComplete notification, updating UI")
+                // Make sure the onboarding flag is set
+                hasCompletedOnboarding = true
+                forceRefresh.toggle()
+            }
+        }
     }
 }
 
@@ -129,8 +76,6 @@ struct LoadingView: View {
     }
 }
 
-
-
 // MARK: - Main App View
 struct MainAppView: View {
     @EnvironmentObject var authViewModel: AuthViewModel
@@ -147,6 +92,7 @@ struct MainAppView: View {
             TabView {
                 NavigationView {
                     PersonalizedAnalysisView()
+                        .environmentObject(authViewModel)
                 }
                 .tabItem {
                     Image(systemName: "chart.bar.doc.horizontal")
@@ -155,6 +101,7 @@ struct MainAppView: View {
                 
                 NavigationView {
                     WeeklyScheduleView()
+                        .environmentObject(authViewModel)
                 }
                 .tabItem {
                     Image(systemName: "calendar")
@@ -163,6 +110,7 @@ struct MainAppView: View {
                 
                 NavigationView {
                     SettingsView()
+                        .environmentObject(authViewModel)
                 }
                 .tabItem {
                     Image(systemName: "gear")

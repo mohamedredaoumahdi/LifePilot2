@@ -8,8 +8,8 @@ struct PersonalizedAnalysisView: View {
     @State private var showingError = false
     @State private var errorMessage = ""
     @State private var previousUserId: String? = nil
-    @State private var navigateToOnboarding = false
     @State private var analysisGenerationAttempted = false
+    @State private var showingGenerationConfirmation = false
     
     var body: some View {
         VStack {
@@ -33,42 +33,20 @@ struct PersonalizedAnalysisView: View {
         .onAppear {
             print("PersonalizedAnalysisView appeared, authViewModel.currentUser: \(String(describing: authViewModel.currentUser))")
             
-            // GET RID OF ALL ONBOARDING CHECKS
-            // We're here, we should stay here!
-            
             // Make sure we have a user ID before attempting to fetch analysis
             if let user = authViewModel.currentUser {
                 let userId = user.id
                 print("Setting user ID: \(userId)")
                 viewModel.setUserId(userId)
                 viewModel.setUserProfile(user)
-                
-                // First fetch existing analysis
-                print("Fetching any existing analysis...")
-                viewModel.fetchExistingAnalysis()
                 previousUserId = userId
-                
-                // Set up a timer to check after a short delay (giving fetch time to complete)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    // Only generate if we're not loading and don't have analysis
-                    if !viewModel.isLoading && viewModel.analysis == nil && !analysisGenerationAttempted {
-                        print("No existing analysis found after delay. Auto-generating...")
-                        analysisGenerationAttempted = true
-                        viewModel.generateAnalysis()
-                    } else {
-                        print("Analysis status: loading=\(viewModel.isLoading), analysis=\(viewModel.analysis != nil), attempted=\(analysisGenerationAttempted)")
-                    }
-                }
             } else {
                 showingError = true
                 errorMessage = "Unable to access user profile. Please try signing out and back in."
             }
-        }// Use onReceive to monitor changes in auth state
-        // Use onReceive to monitor changes in auth state
+        }
         .onReceive(authViewModel.$currentUser) { newUser in
             print("Auth state changed, new user: \(String(describing: newUser))")
-            
-            // GET RID OF ONBOARDING CHECK HERE TOO
             
             // Check if user ID has changed
             let newUserId = newUser?.id
@@ -77,7 +55,6 @@ struct PersonalizedAnalysisView: View {
                     print("User ID changed from \(String(describing: previousUserId)) to \(userId)")
                     viewModel.setUserId(userId)
                     viewModel.setUserProfile(user)
-                    viewModel.fetchExistingAnalysis()
                     showingError = false
                     previousUserId = userId
                     analysisGenerationAttempted = false
@@ -91,7 +68,23 @@ struct PersonalizedAnalysisView: View {
             }
         }
         .navigationTitle("Your Analysis")
+        .alert(isPresented: $showingGenerationConfirmation) {
+            Alert(
+                title: Text("Generate New Analysis?"),
+                message: Text("This will create a new personalized analysis based on your current profile. It may take up to a minute to generate."),
+                primaryButton: .default(Text("Generate")) {
+                    if let user = authViewModel.currentUser {
+                        viewModel.setUserId(user.id)
+                        viewModel.setUserProfile(user)
+                        viewModel.generateAnalysis()
+                        analysisGenerationAttempted = true
+                    }
+                },
+                secondaryButton: .cancel()
+            )
+        }
     }
+    
     // Error banner for user ID issues
     private var errorBanner: some View {
         HStack(spacing: 12) {
@@ -121,20 +114,35 @@ struct PersonalizedAnalysisView: View {
     // MARK: - Header View
     private var headerView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Personalized Insights")
-                .font(.title)
-                .fontWeight(.bold)
-            
-            Text("Based on your profile, here's what LifePilot suggests for your journey.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Personalized Insights")
+                        .font(.title)
+                        .fontWeight(.bold)
+                    
+                    Text("Based on your profile, here's what LifePilot suggests for your journey.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // Add refresh button
+                Button(action: {
+                    showingGenerationConfirmation = true
+                }) {
+                    Image(systemName: "arrow.clockwise.circle")
+                        .font(.title2)
+                        .foregroundColor(.blue)
+                }
+                .disabled(viewModel.isLoading || analysisGenerationAttempted)
+            }
             
             Divider()
         }
         .padding(.horizontal)
     }
     
-    // MARK: - Loading View
     // MARK: - Loading View
     private var loadingView: some View {
         VStack(spacing: 20) {
@@ -173,7 +181,6 @@ struct PersonalizedAnalysisView: View {
                     if let user = authViewModel.currentUser {
                         viewModel.setUserId(user.id)
                         viewModel.setUserProfile(user)
-                        viewModel.fetchExistingAnalysis()
                     }
                 }) {
                     Text("Cancel")
@@ -206,21 +213,6 @@ struct PersonalizedAnalysisView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
             
-            // First try to load existing analysis
-            Button(action: {
-                // First check if an analysis exists in the database
-                viewModel.fetchExistingAnalysis()
-            }) {
-                Text("Check for Existing Analysis")
-                    .fontWeight(.semibold)
-                    .padding(.horizontal, 30)
-                    .padding(.vertical, 12)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-            }
-            .padding(.top)
-            
             // Try generating a new analysis
             Button(action: {
                 if let user = authViewModel.currentUser {
@@ -237,26 +229,16 @@ struct PersonalizedAnalysisView: View {
                     .fontWeight(.semibold)
                     .padding(.horizontal, 30)
                     .padding(.vertical, 12)
-                    .background(Color.green)
+                    .background(Color.blue)
                     .foregroundColor(.white)
                     .cornerRadius(10)
             }
             .padding(.top, 8)
-            
-            // Sign out option as a fallback
-            Button(action: {
-                authViewModel.signOut()
-            }) {
-                Text("Sign Out and Try Again")
-                    .foregroundColor(.red)
-                    .padding(.top, 8)
-            }
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
-    // MARK: - Empty State View
     // MARK: - Empty State View
     private var emptyStateView: some View {
         let generationInProgress = UserDefaults.standard.bool(forKey: "analysisGenerationInProgress")
@@ -277,7 +259,7 @@ struct PersonalizedAnalysisView: View {
             Text(isInBackground ?
                  "Your analysis is being generated in the background. This might take a few minutes." :
                  (analysisGenerationAttempted ?
-                  "Your analysis is being prepared. This might take a moment. Sometimes the process can encounter issues with the AI response format. You can retry if needed." :
+                  "Your analysis is being prepared. This might take a moment." :
                   "Generate your personalized analysis to get insights based on your profile."))
                 .font(.subheadline)
                 .foregroundColor(.secondary)
@@ -287,7 +269,10 @@ struct PersonalizedAnalysisView: View {
             // Different button based on status
             if isInBackground {
                 Button(action: {
-                    viewModel.fetchExistingAnalysis()
+                    if let user = authViewModel.currentUser {
+                        viewModel.setUserId(user.id)
+                        viewModel.setUserProfile(user)
+                    }
                 }) {
                     Text("Check for Analysis")
                         .fontWeight(.semibold)
@@ -301,15 +286,7 @@ struct PersonalizedAnalysisView: View {
             } else {
                 VStack(spacing: 12) {
                     Button(action: {
-                        if let user = authViewModel.currentUser {
-                            viewModel.setUserId(user.id)
-                            viewModel.setUserProfile(user)
-                            viewModel.generateAnalysis()
-                            analysisGenerationAttempted = true
-                        } else {
-                            showingError = true
-                            errorMessage = "User profile not available. Please try signing out and back in."
-                        }
+                        showingGenerationConfirmation = true
                     }) {
                         Text("Generate Analysis")
                             .fontWeight(.semibold)
@@ -319,31 +296,6 @@ struct PersonalizedAnalysisView: View {
                             .foregroundColor(.white)
                             .cornerRadius(10)
                     }
-                    
-                    if analysisGenerationAttempted {
-                        Button(action: {
-                            // Refresh the view
-                            analysisGenerationAttempted = false
-                            viewModel.error = nil
-                            
-                            // Try loading again after a short delay
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                                if let user = authViewModel.currentUser {
-                                    viewModel.setUserId(user.id)
-                                    viewModel.setUserProfile(user)
-                                    viewModel.fetchExistingAnalysis()
-                                }
-                            }
-                        }) {
-                            Text("Reset & Try Again")
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 30)
-                                .padding(.vertical, 12)
-                                .background(Color.gray.opacity(0.3))
-                                .foregroundColor(.primary)
-                                .cornerRadius(10)
-                        }
-                    }
                 }
                 .padding(.top)
             }
@@ -351,6 +303,7 @@ struct PersonalizedAnalysisView: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    
     // MARK: - Analysis Content View
     private func analysisContentView(analysis: PersonalizedAnalysis) -> some View {
         VStack(spacing: 0) {

@@ -2,7 +2,10 @@ import SwiftUI
 
 struct WeeklyScheduleView: View {
     @StateObject private var viewModel = WeeklyScheduleViewModel()
+    @EnvironmentObject private var authViewModel: AuthViewModel
     @State private var showingAddActivity = false
+    @State private var showingRegenerateConfirmation = false
+    @State private var previousUserId: String? = nil
     
     var body: some View {
         VStack(spacing: 0) {
@@ -30,10 +33,11 @@ struct WeeklyScheduleView: View {
                 }
                 
                 Button(action: {
-                    viewModel.regenerateSchedule()
+                    showingRegenerateConfirmation = true
                 }) {
                     Image(systemName: "arrow.clockwise")
                 }
+                .disabled(viewModel.isLoading)
             }
         }
         .sheet(isPresented: $showingAddActivity) {
@@ -41,6 +45,40 @@ struct WeeklyScheduleView: View {
         }
         .sheet(item: $viewModel.editingActivity) { activity in
             ActivityFormView(viewModel: viewModel, activity: activity)
+        }
+        .alert(isPresented: $showingRegenerateConfirmation) {
+            Alert(
+                title: Text("Regenerate Schedule?"),
+                message: Text("This will create a new schedule based on your accepted recommendations. Any custom activities will be preserved."),
+                primaryButton: .default(Text("Regenerate")) {
+                    viewModel.regenerateSchedule()
+                },
+                secondaryButton: .cancel()
+            )
+        }
+        .onAppear {
+            print("WeeklyScheduleView appeared, authViewModel.currentUser: \(String(describing: authViewModel.currentUser))")
+            
+            // Make sure we have a user ID before attempting to fetch schedule
+            if let user = authViewModel.currentUser {
+                let userId = user.id
+                print("Setting user ID: \(userId)")
+                viewModel.setUserId(userId)
+                previousUserId = userId
+            }
+        }
+        .onReceive(authViewModel.$currentUser) { newUser in
+            print("Auth state changed in WeeklyScheduleView, new user: \(String(describing: newUser))")
+            
+            // Check if user ID has changed
+            let newUserId = newUser?.id
+            if newUserId != previousUserId {
+                if let userId = newUserId {
+                    print("User ID changed from \(String(describing: previousUserId)) to \(userId)")
+                    viewModel.setUserId(userId)
+                    previousUserId = userId
+                }
+            }
         }
     }
     
@@ -95,7 +133,9 @@ struct WeeklyScheduleView: View {
                 .padding(.horizontal)
             
             Button(action: {
-                viewModel.fetchSchedule()
+                if let userId = authViewModel.currentUser?.id {
+                    viewModel.setUserId(userId)
+                }
             }) {
                 Text("Try Again")
                     .fontWeight(.semibold)
@@ -122,22 +162,36 @@ struct WeeklyScheduleView: View {
             Text("No Schedule Yet")
                 .font(.headline)
             
-            Text("Generate your weekly schedule based on your accepted recommendations.")
+            Text("Generate your weekly schedule based on your accepted recommendations or add activities manually.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
             
-            Button(action: {
-                viewModel.regenerateSchedule()
-            }) {
-                Text("Generate Schedule")
-                    .fontWeight(.semibold)
-                    .padding(.horizontal, 30)
-                    .padding(.vertical, 12)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
+            VStack(spacing: 12) {
+                Button(action: {
+                    viewModel.regenerateSchedule()
+                }) {
+                    Text("Generate Schedule")
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 30)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+                
+                Button(action: {
+                    showingAddActivity = true
+                }) {
+                    Text("Add Activity Manually")
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 30)
+                        .padding(.vertical, 12)
+                        .background(Color.green)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
             }
             .padding(.top)
         }
@@ -195,6 +249,19 @@ struct WeeklyScheduleView: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
+            
+            Button(action: {
+                showingAddActivity = true
+            }) {
+                Text("Add Activity")
+                    .fontWeight(.semibold)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+            }
+            .padding(.top, 8)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
@@ -541,14 +608,6 @@ struct ColorSwatch: View {
         case .yellow: return .yellow
         case .teal: return .teal
         case .pink: return .pink
-        }
-    }
-}
-
-struct WeeklyScheduleView_Previews: PreviewProvider {
-    static var previews: some View {
-        NavigationView {
-            WeeklyScheduleView()
         }
     }
 }

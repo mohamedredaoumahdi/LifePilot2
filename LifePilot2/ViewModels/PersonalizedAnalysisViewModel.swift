@@ -17,7 +17,8 @@ class PersonalizedAnalysisViewModel: ObservableObject {
     private var userId: String?
     
     // Cancellables for Combine
-    var cancellables = Set<AnyCancellable>()
+    private var cancellables = Set<AnyCancellable>()
+    private var analysisSubscription: AnyCancellable?
     
     // Initialize with dependencies
     init(cohereService: CohereServiceProtocol = CohereService(),
@@ -33,78 +34,77 @@ class PersonalizedAnalysisViewModel: ObservableObject {
                 self?.userProfile = user
                 if let userId = user?.id {
                     self?.userId = userId
-                    print("PersonalizedAnalysisViewModel received user ID: \(userId)")
+                    AppConfig.Debug.log("PersonalizedAnalysisViewModel received user ID: \(userId)")
+                    
+                    // Set up a real-time listener for analysis updates
+                    self?.setupAnalysisListener(userId: userId)
                 }
             }
             .store(in: &cancellables)
+    }
+    
+    deinit {
+        analysisSubscription?.cancel()
+        cancellables.forEach { $0.cancel() }
     }
     
     // MARK: - Public Methods
     
     /// Set the user ID explicitly (used when passing from view)
     func setUserId(_ id: String) {
-        print("Setting user ID in ViewModel: \(id)")
+        AppConfig.Debug.log("Setting user ID in ViewModel: \(id)")
         self.userId = id
+        
+        // Set up a real-time listener for analysis updates
+        setupAnalysisListener(userId: id)
     }
     
-    // Update the generateAnalysis method in PersonalizedAnalysisViewModel.swift
-    func generateAnalysis() {
-        // Check if profile is available
-        guard let userId = self.userId else {
-            self.error = "User ID not available"
-            print("❌ Cannot generate analysis: User ID not available")
-            return
-        }
+    /// Set up a real-time listener for analysis updates
+    private func setupAnalysisListener(userId: String) {
+        // Cancel any existing subscription
+        analysisSubscription?.cancel()
         
-        // First, check if there is already an analysis for this user
-        self.isLoading = true
-        self.error = nil
-        
-        print("Checking for existing analysis before generating new one for user: \(userId)")
-        
-        // First try to fetch existing analysis
-        databaseService.getAnalysis(userId: userId)
+        // Set up a new subscription
+        analysisSubscription = databaseService.observeAnalysis(userId: userId)
             .receive(on: DispatchQueue.main)
             .sink(
                 receiveCompletion: { [weak self] completion in
                     if case .failure(let error) = completion {
-                        print("Error checking for existing analysis: \(error) - will try to generate new one")
-                        // If there was an error fetching, proceed with generation
-                        self?.proceedWithGeneratingAnalysis()
+                        self?.error = "Error observing analysis: \(error.localizedDescription)"
+                        AppConfig.Debug.error("Error observing analysis: \(error)")
                     }
                 },
-                receiveValue: { [weak self] existingAnalysis in
-                    if let analysis = existingAnalysis {
-                        // Analysis already exists, use it
-                        print("Using existing analysis from database")
-                        self?.analysis = analysis
+                receiveValue: { [weak self] analysis in
+                    self?.analysis = analysis
+                    if analysis != nil {
+                        AppConfig.Debug.success("Real-time analysis update received")
+                        // Clear the loading state and error if we receive an analysis
                         self?.isLoading = false
-                    } else {
-                        // No existing analysis, generate a new one
-                        print("No existing analysis found, generating new one")
-                        self?.proceedWithGeneratingAnalysis()
+                        self?.error = nil
                     }
                 }
             )
-            .store(in: &cancellables)
     }
     
-    // New helper method for analysis generation
-    private func proceedWithGeneratingAnalysis() {
-        // Get user profile to use for generation
-        guard let userProfile = userProfile, let userId = self.userId else {
+    // Generate a new analysis
+    func generateAnalysis() {
+        // Check if profile is available
+        guard let userId = self.userId, let userProfile = userProfile else {
             self.error = "User profile not available"
-            self.isLoading = false
-            print("❌ Cannot generate analysis: User profile not available")
+            AppConfig.Debug.error("Cannot generate analysis: User profile not available")
             return
         }
         
-        print("Generating analysis for user ID: \(userId)")
+        // Update UI state
+        self.isLoading = true
+        self.error = nil
+        
+        AppConfig.Debug.log("Generating analysis for user ID: \(userId)")
         
         // Check if we need to use default focus areas
         var profileToUse = userProfile
         if profileToUse.focusAreas.isEmpty {
-            print("Using default focus areas since user hasn't selected any")
+            AppConfig.Debug.log("Using default focus areas since user hasn't selected any")
             profileToUse = createProfileWithDefaultFocusAreas(from: userProfile)
         }
         
@@ -113,11 +113,10 @@ class PersonalizedAnalysisViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink(
                 receiveCompletion: { [weak self] completion in
-                    self?.isLoading = false
-                    
                     if case .failure(let error) = completion {
+                        self?.isLoading = false
                         self?.error = "Error generating analysis: \(error.localizedDescription)"
-                        print("❌ Error generating analysis: \(error)")
+                        AppConfig.Debug.error("Error generating analysis: \(error)")
                     }
                 },
                 receiveValue: { [weak self] responseText in
@@ -129,20 +128,70 @@ class PersonalizedAnalysisViewModel: ObservableObject {
                         var analysis = parsedAnalysis
                         analysis.userId = userId
                         
-                        // Update the view model
-                        self.analysis = analysis
-                        print("✅ Successfully generated and parsed analysis")
-                        
-                        // Save to Firebase
+                        // Save to Firebase - this will trigger our listener
+                        AppConfig.Debug.success("Successfully generated and parsed analysis, saving to Firebase")
                         self.saveAnalysisToDatabase(analysis)
                     } else {
                         self.error = "Failed to parse analysis response"
-                        print("❌ Failed to parse analysis response")
+                        self.isLoading = false
+                        AppConfig.Debug.error("Failed to parse analysis response")
                     }
                 }
             )
             .store(in: &cancellables)
     }
+    
+    /// Update a recommendation status (accept/reject)
+    func updateRecommendationStatus(recommendationId: String, accepted: Bool) {
+        guard var analysis = analysis else { return }
+        
+        // Find and update the recommendation
+        if let index = analysis.recommendations.firstIndex(where: { $0.id == recommendationId }) {
+            analysis.recommendations[index].accepted = accepted
+            
+            // Save to database - this will trigger our listener
+            saveAnalysisToDatabase(analysis)
+        }
+    }
+    
+    /// Fetch existing analysis from the database (one-time fetch)
+    func fetchExistingAnalysis() {
+        guard let userId = self.userId else {
+            self.error = "User ID not available"
+            AppConfig.Debug.error("Cannot fetch analysis: User ID not available")
+            return
+        }
+        
+        AppConfig.Debug.log("Fetching analysis for user ID: \(userId)")
+        self.isLoading = true
+        self.error = nil
+        
+        databaseService.getAnalysis(userId: userId)
+            .receive(on: DispatchQueue.main)
+            .sink(
+                receiveCompletion: { [weak self] completion in
+                    self?.isLoading = false
+                    
+                    if case .failure(let error) = completion {
+                        self?.error = "Error fetching analysis: \(error.localizedDescription)"
+                        AppConfig.Debug.error("Error fetching analysis: \(error)")
+                    }
+                },
+                receiveValue: { [weak self] analysis in
+                    if let analysis = analysis {
+                        AppConfig.Debug.success("Successfully fetched analysis with \(analysis.insights.count) insights")
+                        self?.analysis = analysis
+                    } else {
+                        AppConfig.Debug.log("No analysis found for user")
+                        self?.analysis = nil
+                    }
+                }
+            )
+            .store(in: &cancellables)
+    }
+    
+    // MARK: - Private Methods
+    
     /// Create a copy of the user profile with default focus areas
     private func createProfileWithDefaultFocusAreas(from profile: UserProfile) -> UserProfile {
         // Create a copy with default focus areas for more meaningful analysis
@@ -161,71 +210,18 @@ class PersonalizedAnalysisViewModel: ObservableObject {
         )
     }
     
-    /// Save user's response to recommendations (accept/reject)
-    func updateRecommendationStatus(recommendationId: String, accepted: Bool) {
-        guard var analysis = analysis else { return }
-        
-        // Find and update the recommendation
-        if let index = analysis.recommendations.firstIndex(where: { $0.id == recommendationId }) {
-            analysis.recommendations[index].accepted = accepted
-            
-            // Update local state
-            self.analysis = analysis
-            
-            // Save to database
-            saveAnalysisToDatabase(analysis)
-        }
-    }
-    
-    /// Fetch existing analysis from the database
-    func fetchExistingAnalysis() {
-        guard let userId = self.userId else {
-            self.error = "User ID not available"
-            print("Cannot fetch analysis: User ID not available")
-            return
-        }
-        
-        print("Fetching analysis for user ID: \(userId)")
-        self.isLoading = true
-        self.error = nil
-        
-        databaseService.getAnalysis(userId: userId)
-            .receive(on: DispatchQueue.main)
-            .sink(
-                receiveCompletion: { [weak self] completion in
-                    self?.isLoading = false
-                    
-                    if case .failure(let error) = completion {
-                        self?.error = "Error fetching analysis: \(error.localizedDescription)"
-                        print("Error fetching analysis: \(error)")
-                    }
-                },
-                receiveValue: { [weak self] analysis in
-                    if let analysis = analysis {
-                        print("Successfully fetched analysis with \(analysis.insights.count) insights")
-                        self?.analysis = analysis
-                    } else {
-                        print("No analysis found for user")
-                        self?.analysis = nil
-                    }
-                }
-            )
-            .store(in: &cancellables)
-    }
-    
-    // MARK: - Private Methods
-    
     private func saveAnalysisToDatabase(_ analysis: PersonalizedAnalysis) {
-        print("Saving analysis to database for user ID: \(analysis.userId)")
+        AppConfig.Debug.log("Saving analysis to database for user ID: \(analysis.userId)")
         databaseService.saveAnalysis(analysis)
             .receive(on: DispatchQueue.main)
             .sink(
                 receiveCompletion: { [weak self] completion in
+                    self?.isLoading = false
                     if case .failure(let error) = completion {
                         self?.error = "Error saving analysis: \(error.localizedDescription)"
-                        print("Error saving analysis: \(error)")
+                        AppConfig.Debug.error("Error saving analysis: \(error)")
                     } else {
-                        print("Analysis saved successfully")
+                        AppConfig.Debug.success("Analysis saved successfully to database")
                     }
                 },
                 receiveValue: { _ in
@@ -261,8 +257,11 @@ class PersonalizedAnalysisViewModel: ObservableObject {
     
     /// Set the user profile explicitly (used when passing from coordinator)
     func setUserProfile(_ profile: UserProfile) {
-        print("Setting user profile in ViewModel: \(profile.id)")
+        AppConfig.Debug.log("Setting user profile in ViewModel: \(profile.id)")
         self.userProfile = profile
         self.userId = profile.id
+        
+        // Set up a real-time listener for analysis updates
+        setupAnalysisListener(userId: profile.id)
     }
 }
