@@ -10,17 +10,20 @@ struct PersonalizedAnalysisView: View {
     @State private var previousUserId: String? = nil
     @State private var analysisGenerationAttempted = false
     @State private var showingGenerationConfirmation = false
+    @State private var isInitialLoading = true
     
     var body: some View {
         VStack {
             headerView
             
-            // Error banner if needed
             if showingError {
                 errorBanner
             }
-            
-            if viewModel.isLoading {
+                        
+            // Add the initial loading state check
+            if isInitialLoading {
+                loadingView
+            } else if viewModel.isLoading {
                 loadingView
             } else if let error = viewModel.error {
                 errorView(message: error)
@@ -30,7 +33,11 @@ struct PersonalizedAnalysisView: View {
                 emptyStateView
             }
         }
+        // In your onAppear handler, simplify it to just set the loading state and fetch data
         .onAppear {
+            // Always start with initial loading state
+            isInitialLoading = true
+            
             print("PersonalizedAnalysisView appeared, authViewModel.currentUser: \(String(describing: authViewModel.currentUser))")
             
             // Make sure we have a user ID before attempting to fetch analysis
@@ -40,49 +47,39 @@ struct PersonalizedAnalysisView: View {
                 viewModel.setUserId(userId)
                 viewModel.setUserProfile(user)
                 previousUserId = userId
+                
+                // Don't set any timers here - we'll rely on the data arrival only
             } else {
                 showingError = true
                 errorMessage = "Unable to access user profile. Please try signing out and back in."
+                isInitialLoading = false  // Turn off loading if we can't even get a user
             }
         }
-        .onReceive(authViewModel.$currentUser) { newUser in
-            print("Auth state changed, new user: \(String(describing: newUser))")
-            
-            // Check if user ID has changed
-            let newUserId = newUser?.id
-            if newUserId != previousUserId {
-                if let userId = newUserId, let user = newUser {
-                    print("User ID changed from \(String(describing: previousUserId)) to \(userId)")
-                    viewModel.setUserId(userId)
-                    viewModel.setUserProfile(user)
-                    showingError = false
-                    previousUserId = userId
-                    analysisGenerationAttempted = false
-                } else if previousUserId != nil {
-                    // User has signed out
-                    print("User signed out or user profile lost")
-                    previousUserId = nil
-                    showingError = true
-                    errorMessage = "User profile not available. Please sign in again."
+
+        // In onReceive for analysis, handle the loading state transition
+        .onReceive(viewModel.$analysis) { analysis in
+            // Turn off initial loading when we get analysis data
+            if analysis != nil {
+                print("Analysis data received, turning off initial loading state")
+                isInitialLoading = false
+            }
+        }
+                .navigationTitle("Your Analysis")
+                .alert(isPresented: $showingGenerationConfirmation) {
+                    Alert(
+                        title: Text("Generate New Analysis?"),
+                        message: Text("This will create a new personalized analysis based on your current profile. It may take up to a minute to generate."),
+                        primaryButton: .default(Text("Generate")) {
+                            if let user = authViewModel.currentUser {
+                                viewModel.setUserId(user.id)
+                                viewModel.setUserProfile(user)
+                                viewModel.generateAnalysis()
+                                analysisGenerationAttempted = true
+                            }
+                        },
+                        secondaryButton: .cancel()
+                    )
                 }
-            }
-        }
-        .navigationTitle("Your Analysis")
-        .alert(isPresented: $showingGenerationConfirmation) {
-            Alert(
-                title: Text("Generate New Analysis?"),
-                message: Text("This will create a new personalized analysis based on your current profile. It may take up to a minute to generate."),
-                primaryButton: .default(Text("Generate")) {
-                    if let user = authViewModel.currentUser {
-                        viewModel.setUserId(user.id)
-                        viewModel.setUserProfile(user)
-                        viewModel.generateAnalysis()
-                        analysisGenerationAttempted = true
-                    }
-                },
-                secondaryButton: .cancel()
-            )
-        }
     }
     
     // Error banner for user ID issues
