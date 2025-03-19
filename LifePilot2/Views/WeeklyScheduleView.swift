@@ -5,10 +5,17 @@ struct WeeklyScheduleView: View {
     @EnvironmentObject private var authViewModel: AuthViewModel
     @State private var showingAddActivity = false
     @State private var showingRegenerateConfirmation = false
+    @State private var showingCalendarImport = false
+    @State private var showingNotificationSettings = false
+    @State private var showingStatistics = false
     @State private var previousUserId: String? = nil
     
     var body: some View {
         VStack(spacing: 0) {
+            // Week navigation
+            weekNavigator
+                .padding(.horizontal)
+            
             // Day selector
             daySelector
                 .padding(.horizontal)
@@ -26,18 +33,42 @@ struct WeeklyScheduleView: View {
         .navigationTitle("Weekly Schedule")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
+                // Statistics button
+                Button(action: {
+                    showingStatistics = true
+                }) {
+                    Image(systemName: "chart.bar.fill")
+                }
+                
+                // Add activity button
                 Button(action: {
                     showingAddActivity = true
                 }) {
                     Image(systemName: "plus")
                 }
                 
-                Button(action: {
-                    showingRegenerateConfirmation = true
-                }) {
-                    Image(systemName: "arrow.clockwise")
+                // More options menu
+                Menu {
+                    Button(action: {
+                        viewModel.regenerateSchedule()
+                    }) {
+                        Label("Regenerate Schedule", systemImage: "arrow.clockwise")
+                    }
+                    
+                    Button(action: {
+                        showingCalendarImport = true
+                    }) {
+                        Label("Import Calendar Events", systemImage: "calendar.badge.plus")
+                    }
+                    
+                    Button(action: {
+                        showingNotificationSettings = true
+                    }) {
+                        Label("Notification Settings", systemImage: "bell")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
-                .disabled(viewModel.isLoading)
             }
         }
         .sheet(isPresented: $showingAddActivity) {
@@ -45,6 +76,15 @@ struct WeeklyScheduleView: View {
         }
         .sheet(item: $viewModel.editingActivity) { activity in
             ActivityFormView(viewModel: viewModel, activity: activity)
+        }
+        .sheet(isPresented: $showingCalendarImport) {
+            CalendarImportView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $showingNotificationSettings) {
+            NotificationSettingsView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $showingStatistics) {
+            ActivityStatisticsView(viewModel: viewModel)
         }
         .alert(isPresented: $showingRegenerateConfirmation) {
             Alert(
@@ -82,14 +122,93 @@ struct WeeklyScheduleView: View {
         }
     }
     
+    // MARK: - Week Navigator
+    
+    private var weekNavigator: some View {
+        HStack {
+            Button(action: {
+                viewModel.loadWeek(offset: viewModel.currentWeekOffset - 1)
+            }) {
+                Image(systemName: "chevron.left")
+                    .foregroundColor(.blue)
+            }
+            
+            Spacer()
+            
+            VStack {
+                Text(weekRangeString)
+                    .font(.headline)
+                
+                if viewModel.currentWeekOffset != 0 {
+                    Button("Today") {
+                        viewModel.loadWeek(offset: 0)
+                    }
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                }
+            }
+            
+            Spacer()
+            
+            Button(action: {
+                viewModel.loadWeek(offset: viewModel.currentWeekOffset + 1)
+            }) {
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.blue)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+    
+    private var weekRangeString: String {
+        let calendar = Calendar.current
+        let today = Date()
+        
+        // Get start date with correct offset
+        guard let startDate = calendar.date(byAdding: .day, value: 7 * viewModel.currentWeekOffset, to: today) else {
+            return "Current Week"
+        }
+        
+        // Find start of week containing the start date
+        guard let startOfWeek = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: startDate)) else {
+            return "Current Week"
+        }
+        
+        // Calculate end of week
+        guard let endOfWeek = calendar.date(byAdding: .day, value: 6, to: startOfWeek) else {
+            return "Current Week"
+        }
+        
+        // Format dates
+        let dateFormatter = DateFormatter()
+        
+        // If start and end are in the same month
+        if calendar.component(.month, from: startOfWeek) == calendar.component(.month, from: endOfWeek) {
+            dateFormatter.dateFormat = "MMM d"
+            let startString = dateFormatter.string(from: startOfWeek)
+            dateFormatter.dateFormat = "d, yyyy"
+            let endString = dateFormatter.string(from: endOfWeek)
+            return "\(startString)-\(endString)"
+        } else {
+            // If they span different months
+            dateFormatter.dateFormat = "MMM d"
+            let startString = dateFormatter.string(from: startOfWeek)
+            let endString = dateFormatter.string(from: endOfWeek)
+            dateFormatter.dateFormat = ", yyyy"
+            let yearString = dateFormatter.string(from: endOfWeek)
+            return "\(startString)-\(endString)\(yearString)"
+        }
+    }
+    
     // MARK: - Day Selector
     
     private var daySelector: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
-                ForEach(DayOfWeek.allCases, id: \.self) { day in
+                ForEach(viewModel.daysInCurrentWeek, id: \.self) { day in
                     DayButton(
                         day: day,
+                        date: viewModel.getDateForDay(day, weekOffset: viewModel.currentWeekOffset),
                         isSelected: viewModel.selectedDay == day,
                         onSelect: {
                             viewModel.selectedDay = day
@@ -192,6 +311,18 @@ struct WeeklyScheduleView: View {
                         .foregroundColor(.white)
                         .cornerRadius(10)
                 }
+                
+                Button(action: {
+                    showingCalendarImport = true
+                }) {
+                    Text("Import from Calendar")
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 30)
+                        .padding(.vertical, 12)
+                        .background(Color.orange)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
             }
             .padding(.top)
         }
@@ -207,32 +338,247 @@ struct WeeklyScheduleView: View {
             Color(.systemGroupedBackground)
                 .edgesIgnoringSafeArea(.bottom)
             
-            ScrollView {
-                VStack(spacing: 16) {
-                    let activities = viewModel.activitiesForSelectedDay()
+            if viewModel.viewType == .list {
+                listViewContent(schedule: schedule)
+            } else {
+                timelineViewContent(schedule: schedule)
+            }
+            
+            // View type toggle
+            VStack {
+                Spacer()
+                
+                HStack {
+                    Spacer()
                     
-                    if activities.isEmpty {
-                        noActivitiesView
-                    } else {
-                        ForEach(activities) { activity in
-                            ActivityCardView(
-                                activity: activity,
-                                onToggleCompletion: {
-                                    viewModel.toggleActivityCompletion(activity)
-                                },
-                                onEdit: {
-                                    viewModel.editingActivity = activity
-                                },
-                                onDelete: {
-                                    viewModel.deleteActivity(activity)
-                                }
-                            )
-                        }
+                    Button(action: {
+                        viewModel.viewType = viewModel.viewType == .list ? .timeline : .list
+                    }) {
+                        Image(systemName: viewModel.viewType == .list ? "clock" : "list.bullet")
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                            .shadow(radius: 3)
                     }
+                    .padding()
                 }
-                .padding()
             }
         }
+    }
+    
+    private func listViewContent(schedule: WeeklySchedule) -> some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                let activities = viewModel.activitiesForSelectedDay()
+                
+                if activities.isEmpty {
+                    noActivitiesView
+                } else {
+                    ForEach(activities) { activity in
+                        ActivityCardView(
+                            activity: activity,
+                            onToggleCompletion: {
+                                viewModel.toggleActivityCompletion(activity)
+                            },
+                            onEdit: {
+                                viewModel.editingActivity = activity
+                            },
+                            onDelete: {
+                                viewModel.deleteActivity(activity)
+                            }
+                        )
+                        .padding(.horizontal)
+                    }
+                }
+            }
+            .padding(.vertical)
+        }
+    }
+    
+    private func timelineViewContent(schedule: WeeklySchedule) -> some View {
+        // Time slots for timeline view (30-minute intervals from 6 AM to 10 PM)
+        let timeSlots = stride(from: 6, to: 22, by: 0.5).map { $0 }
+        
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // Time labels and grid
+                HStack(alignment: .top, spacing: 0) {
+                    // Time column
+                    VStack(alignment: .trailing, spacing: 0) {
+                        ForEach(timeSlots, id: \.self) { hour in
+                            Text(formatTimeSlot(hour))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .frame(height: 60)
+                                .frame(width: 50)
+                        }
+                    }
+                    
+                    // Activity area
+                    ZStack(alignment: .top) {
+                        // Time grid lines
+                        VStack(spacing: 0) {
+                            ForEach(timeSlots, id: \.self) { hour in
+                                Divider()
+                                    .padding(.vertical, 29.5)
+                            }
+                        }
+                        
+                        // Activities for the selected day
+                        let activities = viewModel.activitiesForSelectedDay()
+                        
+                        ForEach(activities) { activity in
+                            ActivityTimelineItem(
+                                activity: activity,
+                                onTap: {
+                                    viewModel.editingActivity = activity
+                                }
+                            )
+                            .position(positionForActivity(activity))
+                            .gesture(
+                                DragGesture()
+                                    .onChanged { _ in }
+                                    .onEnded { value in
+                                        // Calculate new time based on drag position
+                                        let newTime = timeFromPosition(value.location)
+                                        viewModel.rescheduleActivity(activity, newTime: newTime)
+                                    }
+                            )
+                        }
+                        
+                        // Current time indicator
+                        if viewModel.currentWeekOffset == 0 && viewModel.selectedDay == WeeklyScheduleViewModel.getCurrentDayOfWeek() {
+                            currentTimeIndicator
+                        }
+                        
+                        // Conflict indicators
+                        ForEach(viewModel.getTimeConflicts(), id: \.hashValue) { time in
+                            conflictIndicator(time: time)
+                        }
+                    }
+                    .frame(height: CGFloat(timeSlots.count) * 60)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(12)
+                }
+                
+                // No activities message if needed
+                if viewModel.activitiesForSelectedDay().isEmpty {
+                    Text("No activities scheduled")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding()
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+    
+    private var currentTimeIndicator: some View {
+        GeometryReader { geometry in
+            let now = Date()
+            let calendar = Calendar.current
+            let hour = calendar.component(.hour, from: now)
+            let minute = calendar.component(.minute, from: now)
+            
+            // Calculate position (hours since 6 AM)
+            let hourOffset = Double(hour) + Double(minute) / 60.0 - 6.0
+            
+            // Only show if within the displayed time range
+            if hourOffset >= 0 && hourOffset <= 16 {
+                let yPosition = hourOffset * 60.0
+                
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.red)
+                        .frame(height: 2)
+                    
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                }
+                .position(x: geometry.size.width / 2, y: yPosition)
+            }
+        }
+    }
+    
+    private func conflictIndicator(time: Date) -> some View {
+        let calendar = Calendar.current
+        let hour = calendar.component(.hour, from: time)
+        let minute = calendar.component(.minute, from: time)
+        
+        // Calculate position (hours since 6 AM)
+        let hourOffset = Double(hour) + Double(minute) / 60.0 - 6.0
+        
+        // Only show if within the displayed time range
+        if hourOffset >= 0 && hourOffset <= 16 {
+            let yPosition = hourOffset * 60.0
+            
+            return Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+                .background(Circle().fill(Color.white).frame(width: 20, height: 20))
+                .position(x: UIScreen.main.bounds.width / 2 - 50, y: yPosition)
+        } else {
+            return EmptyView()
+        }
+    }
+    
+    private func formatTimeSlot(_ hour: Double) -> String {
+        let isHalfHour = hour.truncatingRemainder(dividingBy: 1) != 0
+        let hourInt = Int(hour)
+        let minuteInt = isHalfHour ? 30 : 0
+        
+        let dateComponents = DateComponents(hour: hourInt, minute: minuteInt)
+        if let date = Calendar.current.date(from: dateComponents) {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "h:mm a"
+            return formatter.string(from: date)
+        }
+        return ""
+    }
+    
+    private func positionForActivity(_ activity: ScheduledActivity) -> CGPoint {
+        let calendar = Calendar.current
+        let startHour = calendar.component(.hour, from: activity.startTime)
+        let startMinute = calendar.component(.minute, from: activity.startTime)
+        
+        // Calculate position (hours since 6 AM)
+        let hourOffset = Double(startHour) + Double(startMinute) / 60.0 - 6.0
+        let yPosition = hourOffset * 60.0 + 30.0 // Add 30 for centering
+        
+        // X position (centered in the available space)
+        let xPosition = UIScreen.main.bounds.width / 2
+        
+        return CGPoint(x: xPosition, y: yPosition)
+    }
+    
+    private func timeFromPosition(_ position: CGPoint) -> Date {
+        // Convert Y position to time
+        let hourOffset = position.y / 60.0 + 6.0 // 6 AM is the start time
+        
+        // Round to nearest 15 minutes
+        let hourComponent = Int(hourOffset)
+        let minuteFraction = hourOffset - Double(hourComponent)
+        let minuteComponent: Int
+        
+        if minuteFraction < 0.25 {
+            minuteComponent = 0
+        } else if minuteFraction < 0.5 {
+            minuteComponent = 15
+        } else if minuteFraction < 0.75 {
+            minuteComponent = 30
+        } else {
+            minuteComponent = 45
+        }
+        
+        // Create date components
+        var components = Calendar.current.dateComponents([.year, .month, .day], from: viewModel.getDateForDay(viewModel.selectedDay, weekOffset: viewModel.currentWeekOffset))
+        components.hour = hourComponent
+        components.minute = minuteComponent
+        
+        return Calendar.current.date(from: components) ?? Date()
     }
     
     private var noActivitiesView: some View {
@@ -268,12 +614,80 @@ struct WeeklyScheduleView: View {
     }
 }
 
+// MARK: - Activity Timeline Item
+
+struct ActivityTimelineItem: View {
+    let activity: ScheduledActivity
+    let onTap: () -> Void
+    
+    private var activityDuration: TimeInterval {
+        return activity.endTime.timeIntervalSince(activity.startTime)
+    }
+    
+    private var activityHeight: CGFloat {
+        // Convert duration to height (1 hour = 60 points)
+        return max(30, CGFloat(activityDuration / 60) * 1)
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(activity.title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .lineLimit(1)
+            
+            if activityHeight > 50 {
+                Text(timeRangeString)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+        }
+        .padding(8)
+        .frame(width: UIScreen.main.bounds.width - 80, height: activityHeight)
+        .background(activityColor.opacity(0.9))
+        .cornerRadius(8)
+        .onTapGesture {
+            onTap()
+        }
+    }
+    
+    private var timeRangeString: String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        
+        let startTime = formatter.string(from: activity.startTime)
+        let endTime = formatter.string(from: activity.endTime)
+        
+        return "\(startTime) - \(endTime)"
+    }
+    
+    private var activityColor: Color {
+        switch activity.color {
+        case .blue: return .blue
+        case .green: return .green
+        case .orange: return .orange
+        case .purple: return .purple
+        case .red: return .red
+        case .yellow: return Color(UIColor.systemYellow)
+        case .teal: return .teal
+        case .pink: return .pink
+        }
+    }
+}
+
 // MARK: - Day Button
 
 struct DayButton: View {
     let day: DayOfWeek
+    let date: Date
     let isSelected: Bool
     let onSelect: () -> Void
+    
+    private var isToday: Bool {
+        Calendar.current.isDateInToday(date)
+    }
     
     var body: some View {
         Button(action: onSelect) {
@@ -284,13 +698,13 @@ struct DayButton: View {
                 
                 ZStack {
                     Circle()
-                        .fill(isSelected ? Color.blue : Color.clear)
+                        .fill(backgroundColor)
                         .frame(width: 40, height: 40)
                     
-                    Text(dayNumber(for: day))
+                    Text(dayNumber)
                         .font(.title3)
                         .fontWeight(.bold)
-                        .foregroundColor(isSelected ? .white : .primary)
+                        .foregroundColor(textColor)
                 }
             }
             .padding(.horizontal, 4)
@@ -298,37 +712,30 @@ struct DayButton: View {
         .buttonStyle(PlainButtonStyle())
     }
     
-    private func dayNumber(for day: DayOfWeek) -> String {
-        // Get the current week's date for this day
-        let today = Date()
-        let calendar = Calendar.current
-        
-        // Get the current weekday (1 = Sunday, 2 = Monday, etc.)
-        let currentWeekday = calendar.component(.weekday, from: today)
-        
-        // Convert our DayOfWeek to Calendar's weekday format
-        let targetWeekday: Int
-        switch day {
-        case .sunday: targetWeekday = 1
-        case .monday: targetWeekday = 2
-        case .tuesday: targetWeekday = 3
-        case .wednesday: targetWeekday = 4
-        case .thursday: targetWeekday = 5
-        case .friday: targetWeekday = 6
-        case .saturday: targetWeekday = 7
+    private var dayNumber: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d"
+        return formatter.string(from: date)
+    }
+    
+    private var backgroundColor: Color {
+        if isSelected {
+            return .blue
+        } else if isToday {
+            return .blue.opacity(0.3)
+        } else {
+            return .clear
         }
-        
-        // Calculate the offset in days
-        let daysOffset = targetWeekday - currentWeekday
-        
-        // Get the date of the target day
-        if let targetDate = calendar.date(byAdding: .day, value: daysOffset, to: today) {
-            let dayNumber = calendar.component(.day, from: targetDate)
-            return String(dayNumber)
+    }
+    
+    private var textColor: Color {
+        if isSelected {
+            return .white
+        } else if isToday {
+            return .blue
+        } else {
+            return .primary
         }
-        
-        // Fallback
-        return ""
     }
 }
 
@@ -365,6 +772,18 @@ struct ActivityCardView: View {
                     .background(activityColor.opacity(0.2))
                     .foregroundColor(activityColor)
                     .cornerRadius(8)
+            }
+            
+            // Recurrence indicator if this is a recurring activity
+            if activity.recurrenceRule != nil {
+                HStack {
+                    Image(systemName: "repeat")
+                        .foregroundColor(.blue)
+                    
+                    Text(recurrenceText)
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
             }
             
             // Description (if available)
@@ -444,6 +863,21 @@ struct ActivityCardView: View {
         return "\(startTime) - \(endTime)"
     }
     
+    private var recurrenceText: String {
+        guard let rule = activity.recurrenceRule else { return "" }
+        
+        switch rule.frequency {
+        case .daily:
+            return "Daily"
+        case .weekly:
+            return "Weekly"
+        case .monthly:
+            return "Monthly"
+        default:
+            return "Recurring"
+        }
+    }
+    
     private var activityColor: Color {
         switch activity.color {
         case .blue: return .blue
@@ -451,7 +885,7 @@ struct ActivityCardView: View {
         case .orange: return .orange
         case .purple: return .purple
         case .red: return .red
-        case .yellow: return .yellow
+        case .yellow: return Color(UIColor.systemYellow)
         case .teal: return .teal
         case .pink: return .pink
         }
@@ -472,6 +906,14 @@ struct ActivityFormView: View {
     @State private var endDate = Date().addingTimeInterval(3600) // 1 hour later
     @State private var activityType: ActivityType = .task
     @State private var activityColor: ActivityColor = .blue
+    @State private var enableNotifications = true
+    @State private var reminderTime: Int = 15 // Minutes before
+    
+    // Recurrence options
+    @State private var isRecurring = false
+    @State private var recurrenceFrequency: RecurrenceRule.Frequency = .weekly
+    @State private var recurrenceInterval: Int = 1
+    @State private var selectedDaysOfWeek: [Int] = []
     
     // Optional activity for editing
     var activity: ScheduledActivity?

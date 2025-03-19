@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		169795072D8A55BD00BB6B59 /* CalendarImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 169795062D8A55BC00BB6B59 /* CalendarImportView.swift */; };
+		169795092D8A55E300BB6B59 /* NotificationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 169795082D8A55E300BB6B59 /* NotificationSettingsView.swift */; };
+		1697950B2D8A561000BB6B59 /* ActivityStatisticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1697950A2D8A561000BB6B59 /* ActivityStatisticsView.swift */; };
 		16E655A02D8510CB00BF1A1E /* LifePilot2App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E6559F2D8510CB00BF1A1E /* LifePilot2App.swift */; };
 		16E655A22D8510CB00BF1A1E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E655A12D8510CB00BF1A1E /* ContentView.swift */; };
 		16E655A42D8510CB00BF1A1E /* Item.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E655A32D8510CB00BF1A1E /* Item.swift */; };
@@ -58,6 +61,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		169795062D8A55BC00BB6B59 /* CalendarImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarImportView.swift; sourceTree = "<group>"; };
+		169795082D8A55E300BB6B59 /* NotificationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationSettingsView.swift; sourceTree = "<group>"; };
+		1697950A2D8A561000BB6B59 /* ActivityStatisticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityStatisticsView.swift; sourceTree = "<group>"; };
 		16E6559C2D8510CB00BF1A1E /* LifePilot2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LifePilot2.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		16E6559F2D8510CB00BF1A1E /* LifePilot2App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LifePilot2App.swift; sourceTree = "<group>"; };
 		16E655A12D8510CB00BF1A1E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -243,6 +249,9 @@
 				16E655E22D85131500BF1A1E /* InsightCardView.swift */,
 				16E89DC72D87B874009E2CE0 /* AuthLoadingView.swift */,
 				16E89DC92D87B967009E2CE0 /* AuthErrorView.swift */,
+				169795062D8A55BC00BB6B59 /* CalendarImportView.swift */,
+				169795082D8A55E300BB6B59 /* NotificationSettingsView.swift */,
+				1697950A2D8A561000BB6B59 /* ActivityStatisticsView.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -395,6 +404,7 @@
 				16E655DC2D8512A900BF1A1E /* PersonalizedAnalysisView.swift in Sources */,
 				16E655D32D8511FA00BF1A1E /* WeeklyScheduleViewModel.swift in Sources */,
 				16E655D52D85122100BF1A1E /* ScheduleModels.swift in Sources */,
+				1697950B2D8A561000BB6B59 /* ActivityStatisticsView.swift in Sources */,
 				16E89DC62D87B2C9009E2CE0 /* FirebaseConfigCheck.swift in Sources */,
 				16E655ED2D85194C00BF1A1E /* PersonalizedAnalysisViewModel.swift in Sources */,
 				16E89DC82D87B874009E2CE0 /* AuthLoadingView.swift in Sources */,
@@ -404,6 +414,8 @@
 				16E89DC22D87AAC9009E2CE0 /* AuthView.swift in Sources */,
 				16E655A02D8510CB00BF1A1E /* LifePilot2App.swift in Sources */,
 				16E655E12D8512FA00BF1A1E /* RecommendationCardView.swift in Sources */,
+				169795092D8A55E300BB6B59 /* NotificationSettingsView.swift in Sources */,
+				169795072D8A55BD00BB6B59 /* CalendarImportView.swift in Sources */,
 				16E655E72D85137B00BF1A1E /* CohereService.swift in Sources */,
 				16E655D72D85124F00BF1A1E /* OnboardingView.swift in Sources */,
 				16E655DF2D8512DF00BF1A1E /* EvidenceLinkView.swift in Sources */,

@@ -1,0 +1,51 @@
+flowchart TD
+    A[User Opens App] --> B{Authentication State}
+    B -->|Not Authenticated| C[Authentication View]
+    C -->|Sign In/Sign Up| D{OnboardingCompleted?}
+    B -->|Authenticated| D
+    
+    D -->|No| E[Onboarding Flow]
+    E -->|Step 1| E1[Welcome]
+    E1 -->|Next| E2[Personality Questions]
+    E2 -->|Next| E3[Lifestyle Questions]
+    E3 -->|Next| E4[Goals Questions]
+    E4 -->|Next| E5[Profile Summary]
+    E5 -->|Next| E6[Confirmation]
+    E6 -->|Complete| E7[Analysis Generation]
+    E7 --> F
+    
+    D -->|Yes| F[Main App TabView]
+    
+    F -->|Tab 1| G[PersonalizedAnalysis View]
+    F -->|Tab 2| H[WeeklySchedule View]
+    F -->|Tab 3| I[Settings View]
+    
+    G -->|Generate| J[Cohere API Request]
+    J -->|Process Response| K[Display Insights/Recommendations]
+    K -->|Accept/Reject| L[Update Recommendations]
+    
+    H -->|View Schedule| M[Display Activities]
+    H -->|Add Activity| N[Create Manual Activity]
+    H -->|Regenerate| O[Create Schedule from Recommendations]
+    
+    L --> O
+    
+    I -->|Sign Out| P[Return to Auth View]
+    
+    subgraph "Firebase Services"
+    AA[Authentication]
+    BB[User Profile Storage]
+    CC[Analysis Storage]
+    DD[Schedule Storage]
+    end
+    
+    C -.-> AA
+    E7 -.-> BB
+    G -.-> CC
+    H -.-> DD
+    
+    subgraph "External Services"
+    ZZ[Cohere AI API]
+    end
+    
+    J -.-> ZZ

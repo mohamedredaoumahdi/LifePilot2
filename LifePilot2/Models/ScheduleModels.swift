@@ -69,8 +69,9 @@ enum DayOfWeek: String, Codable, CaseIterable {
     }
 }
 
+
 // MARK: - Scheduled Activity Model
-struct ScheduledActivity: Codable, Identifiable {
+struct ScheduledActivity: Codable, Identifiable, Hashable {
     var id: String
     var title: String
     var description: String?
@@ -83,6 +84,14 @@ struct ScheduledActivity: Codable, Identifiable {
     var color: ActivityColor
     var notes: String?
     
+    // Notification settings
+    var enableReminders: Bool
+    var reminderMinutesBefore: Int
+    
+    // Recurrence properties
+    var recurrenceRule: RecurrenceRule?
+    var recurringParentId: String? // For recurring instances, link to parent
+    
     init(id: String = UUID().uuidString,
          title: String,
          description: String? = nil,
@@ -93,7 +102,11 @@ struct ScheduledActivity: Codable, Identifiable {
          isRecommended: Bool = false,
          relatedRecommendationId: String? = nil,
          color: ActivityColor = .blue,
-         notes: String? = nil) {
+         notes: String? = nil,
+         enableReminders: Bool = true,
+         reminderMinutesBefore: Int = 15,
+         recurrenceRule: RecurrenceRule? = nil,
+         recurringParentId: String? = nil) {
         self.id = id
         self.title = title
         self.description = description
@@ -105,6 +118,47 @@ struct ScheduledActivity: Codable, Identifiable {
         self.relatedRecommendationId = relatedRecommendationId
         self.color = color
         self.notes = notes
+        self.enableReminders = enableReminders
+        self.reminderMinutesBefore = reminderMinutesBefore
+        self.recurrenceRule = recurrenceRule
+        self.recurringParentId = recurringParentId
+    }
+    
+    // Hashable implementation
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+    
+    static func == (lhs: ScheduledActivity, rhs: ScheduledActivity) -> Bool {
+        return lhs.id == rhs.id
+    }
+}
+
+// MARK: - Recurrence Rule
+struct RecurrenceRule: Codable, Hashable {
+    enum Frequency: String, Codable, CaseIterable {
+        case daily
+        case weekly
+        case monthly
+        case yearly
+    }
+    
+    var frequency: Frequency
+    var interval: Int // Every X days/weeks/months
+    var daysOfWeek: [Int]? // For weekly recurrence, days of week (1=Sunday, 7=Saturday)
+    var endDate: Date? // Optional end date
+    var occurrences: Int? // Optional max occurrences
+    
+    init(frequency: Frequency,
+         interval: Int = 1,
+         daysOfWeek: [Int]? = nil,
+         endDate: Date? = nil,
+         occurrences: Int? = nil) {
+        self.frequency = frequency
+        self.interval = interval
+        self.daysOfWeek = daysOfWeek
+        self.endDate = endDate
+        self.occurrences = occurrences
     }
 }
 
