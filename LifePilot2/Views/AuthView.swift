@@ -51,6 +51,7 @@ struct AuthView: View {
                                 TextField("Name", text: $name)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
                                     .autocapitalization(.words)
+                                    .autocorrectionDisabled(true)
                                     .focused($focusedField, equals: .name)
                                     .submitLabel(.next)
                                     .onSubmit {

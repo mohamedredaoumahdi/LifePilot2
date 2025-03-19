@@ -22,46 +22,14 @@ struct SettingsView: View {
             Section(header: Text("Account")) {
                 if let user = authViewModel.currentUser {
                     HStack {
-                        Text(user.name)
-                            .font(.headline)
-                        Spacer()
                         Text(user.email)
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
                     .padding(.vertical, 8)
                 }
-                
-                Button(action: {
-                    showSignOutConfirmation = true
-                }) {
-                    HStack {
-                        Text("Sign Out")
-                            .foregroundColor(.red)
-                        
-                        Spacer()
-                        
-                        if case .authenticating = authViewModel.authState {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                                .scaleEffect(0.8)
-                        }
-                    }
-                }
-                .disabled(authViewModel.authState == .authenticating)
-                .confirmationDialog("Sign Out", isPresented: $showSignOutConfirmation) {
-                    Button("Sign Out", role: .destructive) {
-                        authViewModel.signOut()
-                    }
-                    
-                    Button("Cancel", role: .cancel) {
-                        // Just close the dialog
-                    }
-                } message: {
-                    Text("Are you sure you want to sign out?")
-                }
             }
-            
+            /*
             Section(header: Text("Preferences")) {
                 Button(action: {
                     // Reset onboarding flag for testing
@@ -71,7 +39,7 @@ struct SettingsView: View {
                         .foregroundColor(.blue)
                 }
             }
-            
+            */
             Section(header: Text("About")) {
                 HStack {
                     Text("Version")
@@ -82,10 +50,34 @@ struct SettingsView: View {
                 
                 // Display Firebase auth status
                 HStack {
-                    Text("Auth Status")
-                    Spacer()
-                    Text(authStatusText)
-                        .foregroundColor(authStatusColor)
+                    Button(action: {
+                        showSignOutConfirmation = true
+                    }) {
+                        HStack {
+                            Text("Sign Out")
+                                .foregroundColor(.red)
+                            
+                            Spacer()
+                            
+                            if case .authenticating = authViewModel.authState {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                                    .scaleEffect(0.8)
+                            }
+                        }
+                    }
+                    .disabled(authViewModel.authState == .authenticating)
+                    .confirmationDialog("Sign Out", isPresented: $showSignOutConfirmation) {
+                        Button("Sign Out", role: .destructive) {
+                            authViewModel.signOut()
+                        }
+                        
+                        Button("Cancel", role: .cancel) {
+                            // Just close the dialog
+                        }
+                    } message: {
+                        Text("Are you sure you want to sign out?")
+                    }
                 }
             }
             
