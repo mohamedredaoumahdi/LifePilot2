@@ -1,5 +1,7 @@
 import SwiftUI
 
+
+
 struct WeeklyScheduleView: View {
     @StateObject private var viewModel = WeeklyScheduleViewModel()
     @EnvironmentObject private var authViewModel: AuthViewModel
@@ -400,7 +402,7 @@ struct WeeklyScheduleView: View {
         // Time slots for timeline view (30-minute intervals from 6 AM to 10 PM)
         let timeSlots = stride(from: 6, to: 22, by: 0.5).map { $0 }
         
-        ScrollView {
+        return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // Time labels and grid
                 HStack(alignment: .top, spacing: 0) {
@@ -512,16 +514,25 @@ struct WeeklyScheduleView: View {
         // Calculate position (hours since 6 AM)
         let hourOffset = Double(hour) + Double(minute) / 60.0 - 6.0
         
-        // Only show if within the displayed time range
-        if hourOffset >= 0 && hourOffset <= 16 {
-            let yPosition = hourOffset * 60.0
-            
-            return Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.orange)
-                .background(Circle().fill(Color.white).frame(width: 20, height: 20))
+        return Group {
+            // Only show if within the displayed time range
+            if hourOffset >= 0 && hourOffset <= 16 {
+                let yPosition = hourOffset * 60.0
+                
+                ZStack {
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 20, height: 20)
+                    
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 14))
+                }
                 .position(x: UIScreen.main.bounds.width / 2 - 50, y: yPosition)
-        } else {
-            return EmptyView()
+            } else {
+                // This empty view will be invisible but maintains type consistency
+                EmptyView()
+            }
         }
     }
     
@@ -892,164 +903,390 @@ struct ActivityCardView: View {
     }
 }
 
-// MARK: - Activity Form View
+// MARK: - Recurrence End Option
+enum RecurrenceEndOption {
+    case never
+    case onDate
+    case afterOccurrences
+}
 
-struct ActivityFormView: View {
-    @Environment(\.presentationMode) private var presentationMode
-    @ObservedObject var viewModel: WeeklyScheduleViewModel
+// MARK: - Weekday Selector
+struct WeekdaySelector: View {
+    @Binding var selectedDays: [Int]
     
-    // Form state
-    @State private var title = ""
-    @State private var description = ""
-    @State private var notes = ""
-    @State private var startDate = Date()
-    @State private var endDate = Date().addingTimeInterval(3600) // 1 hour later
-    @State private var activityType: ActivityType = .task
-    @State private var activityColor: ActivityColor = .blue
-    @State private var enableNotifications = true
-    @State private var reminderTime: Int = 15 // Minutes before
-    
-    // Recurrence options
-    @State private var isRecurring = false
-    @State private var recurrenceFrequency: RecurrenceRule.Frequency = .weekly
-    @State private var recurrenceInterval: Int = 1
-    @State private var selectedDaysOfWeek: [Int] = []
-    
-    // Optional activity for editing
-    var activity: ScheduledActivity?
-    
-    // Form validation
-    private var isValidForm: Bool {
-        !title.isEmpty && endDate > startDate
-    }
+    private let weekdays = [
+        (1, "Sun"),
+        (2, "Mon"),
+        (3, "Tue"),
+        (4, "Wed"),
+        (5, "Thu"),
+        (6, "Fri"),
+        (7, "Sat")
+    ]
     
     var body: some View {
-        NavigationView {
-            Form {
-                Section(header: Text("Activity Details")) {
-                    TextField("Title", text: $title)
-                    
-                    TextField("Description (Optional)", text: $description)
-                    
-                    TextField("Notes (Optional)", text: $notes)
-                }
-                
-                Section(header: Text("Time")) {
-                    DatePicker("Start Time", selection: $startDate, displayedComponents: [.date, .hourAndMinute])
-                    
-                    DatePicker("End Time", selection: $endDate, displayedComponents: [.date, .hourAndMinute])
-                }
-                
-                Section(header: Text("Activity Type")) {
-                    Picker("Type", selection: $activityType) {
-                        ForEach(ActivityType.allCases, id: \.self) { type in
-                            Text(type.rawValue).tag(type)
-                        }
+        VStack(alignment: .leading) {
+            Text("Repeat on")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            
+            HStack {
+                ForEach(weekdays, id: \.0) { day in
+                    Button(action: {
+                        toggleDay(day.0)
+                    }) {
+                        Text(day.1)
+                            .font(.caption)
+                            .padding(8)
+                            .background(
+                                Circle()
+                                    .fill(selectedDays.contains(day.0) ? Color.blue : Color.gray.opacity(0.2))
+                            )
+                            .foregroundColor(selectedDays.contains(day.0) ? .white : .primary)
                     }
-                    .pickerStyle(MenuPickerStyle())
-                }
-                
-                Section(header: Text("Color")) {
-                    Picker("Color", selection: $activityColor) {
-                        ForEach(ActivityColor.allCases, id: \.self) { color in
-                            HStack {
-                                ColorSwatch(color: color)
-                                Text(color.rawValue)
-                            }
-                            .tag(color)
-                        }
-                    }
-                    .pickerStyle(MenuPickerStyle())
-                }
-            }
-            .navigationTitle(activity == nil ? "Add Activity" : "Edit Activity")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(activity == nil ? "Add" : "Save") {
-                        saveActivity()
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                    .disabled(!isValidForm)
-                }
-            }
-            .onAppear {
-                // If editing an existing activity, populate the form
-                if let activity = activity {
-                    title = activity.title
-                    description = activity.description ?? ""
-                    notes = activity.notes ?? ""
-                    startDate = activity.startTime
-                    endDate = activity.endTime
-                    activityType = activity.activityType
-                    activityColor = activity.color
+                    .buttonStyle(PlainButtonStyle())
                 }
             }
         }
     }
     
-    private func saveActivity() {
-        if let activity = activity {
-            // Update existing activity
-            let updatedActivity = ScheduledActivity(
-                id: activity.id,
-                title: title,
-                description: description.isEmpty ? nil : description,
-                startTime: startDate,
-                endTime: endDate,
-                activityType: activityType,
-                isCompleted: activity.isCompleted,
-                isRecommended: activity.isRecommended,
-                relatedRecommendationId: activity.relatedRecommendationId,
-                color: activityColor,
-                notes: notes.isEmpty ? nil : notes
-            )
-            
-            viewModel.updateActivity(updatedActivity)
+    private func toggleDay(_ day: Int) {
+        if selectedDays.contains(day) {
+            selectedDays.removeAll { $0 == day }
         } else {
-            // Create new activity
-            let newActivity = ScheduledActivity(
-                title: title,
-                description: description.isEmpty ? nil : description,
-                startTime: startDate,
-                endTime: endDate,
-                activityType: activityType,
-                color: activityColor,
-                notes: notes.isEmpty ? nil : notes
-            )
-            
-            viewModel.addActivity(newActivity)
+            selectedDays.append(day)
+            selectedDays.sort()
         }
     }
-}
-
-// MARK: - Color Swatch
-
-struct ColorSwatch: View {
-    let color: ActivityColor
-    
-    var body: some View {
-        Circle()
-            .fill(swatchColor)
-            .frame(width: 20, height: 20)
     }
-    
-    private var swatchColor: Color {
-        switch color {
-        case .blue: return .blue
-        case .green: return .green
-        case .orange: return .orange
-        case .purple: return .purple
-        case .red: return .red
-        case .yellow: return .yellow
-        case .teal: return .teal
-        case .pink: return .pink
-        }
+
+    // MARK: - Color Swatch
+    struct ColorSwatch: View {
+       let color: ActivityColor
+       
+       var body: some View {
+           Circle()
+               .fill(swatchColor)
+               .frame(width: 20, height: 20)
+       }
+       
+       private var swatchColor: Color {
+           switch color {
+           case .blue: return .blue
+           case .green: return .green
+           case .orange: return .orange
+           case .purple: return .purple
+           case .red: return .red
+           case .yellow: return .yellow
+           case .teal: return .teal
+           case .pink: return .pink
+           }
+       }
     }
-}
+
+    // MARK: - Activity Form View
+    struct ActivityFormView: View {
+       @Environment(\.presentationMode) private var presentationMode
+       @ObservedObject var viewModel: WeeklyScheduleViewModel
+       
+       // Form state
+       @State private var title = ""
+       @State private var description = ""
+       @State private var notes = ""
+       @State private var startDate = Date()
+       @State private var endDate = Date().addingTimeInterval(3600) // 1 hour later
+       @State private var activityType: ActivityType = .task
+       @State private var activityColor: ActivityColor = .blue
+       @State private var enableNotifications = true
+       @State private var reminderTime: Int = 15 // Minutes before
+       
+       // Recurrence options
+       @State private var isRecurring = false
+       @State private var recurrenceFrequency: RecurrenceRule.Frequency = .weekly
+       @State private var recurrenceInterval: Int = 1
+       @State private var selectedDaysOfWeek: [Int] = []
+       @State private var recurrenceEndOption: RecurrenceEndOption = .never
+       @State private var recurrenceEndDate = Calendar.current.date(byAdding: .month, value: 3, to: Date()) ?? Date()
+       @State private var recurrenceOccurrences = 10
+       
+       // Time conflict checking
+       @State private var hasTimeConflict = false
+       @State private var showingConflictAlert = false
+       
+       // Optional activity for editing
+       var activity: ScheduledActivity?
+       
+       // Form validation
+       private var isValidForm: Bool {
+           !title.isEmpty && endDate > startDate
+       }
+       
+       var body: some View {
+           NavigationView {
+               Form {
+                   Section(header: Text("Activity Details")) {
+                       TextField("Title", text: $title)
+                       
+                       TextField("Description (Optional)", text: $description)
+                       
+                       TextField("Notes (Optional)", text: $notes)
+                   }
+                   
+                   Section(header: Text("Time")) {
+                       DatePicker("Start Time", selection: $startDate, displayedComponents: [.date, .hourAndMinute])
+                           .onChange(of: startDate) { _ in
+                               checkForTimeConflicts()
+                           }
+                       
+                       DatePicker("End Time", selection: $endDate, displayedComponents: [.date, .hourAndMinute])
+                           .onChange(of: endDate) { _ in
+                               checkForTimeConflicts()
+                           }
+                       
+                       if hasTimeConflict {
+                           HStack {
+                               Image(systemName: "exclamationmark.triangle.fill")
+                                   .foregroundColor(.orange)
+                               Text("This time conflicts with another activity")
+                                   .font(.caption)
+                                   .foregroundColor(.orange)
+                           }
+                       }
+                   }
+                   
+                   Section(header: Text("Activity Type")) {
+                       Picker("Type", selection: $activityType) {
+                           ForEach(ActivityType.allCases, id: \.self) { type in
+                               Text(type.rawValue).tag(type)
+                           }
+                       }
+                       .pickerStyle(MenuPickerStyle())
+                   }
+                   
+                   Section(header: Text("Color")) {
+                       Picker("Color", selection: $activityColor) {
+                           ForEach(ActivityColor.allCases, id: \.self) { color in
+                               HStack {
+                                   ColorSwatch(color: color)
+                                   Text(color.rawValue)
+                               }
+                               .tag(color)
+                           }
+                       }
+                       .pickerStyle(MenuPickerStyle())
+                   }
+                   
+                   Section(header: Text("Reminders")) {
+                       Toggle("Enable Reminders", isOn: $enableNotifications)
+                       
+                       if enableNotifications {
+                           Picker("Remind Me", selection: $reminderTime) {
+                               Text("At time of activity").tag(0)
+                               Text("5 minutes before").tag(5)
+                               Text("15 minutes before").tag(15)
+                               Text("30 minutes before").tag(30)
+                               Text("1 hour before").tag(60)
+                           }
+                       }
+                   }
+                   
+                   Section(header: Text("Recurrence")) {
+                       Toggle("Repeat This Activity", isOn: $isRecurring)
+                       
+                       if isRecurring {
+                           Picker("Frequency", selection: $recurrenceFrequency) {
+                               Text("Daily").tag(RecurrenceRule.Frequency.daily)
+                               Text("Weekly").tag(RecurrenceRule.Frequency.weekly)
+                               Text("Monthly").tag(RecurrenceRule.Frequency.monthly)
+                               Text("Yearly").tag(RecurrenceRule.Frequency.yearly)
+                           }
+                           .pickerStyle(SegmentedPickerStyle())
+                           
+                           Stepper(value: $recurrenceInterval, in: 1...30) {
+                               Text("Every \(recurrenceInterval) \(frequencyLabel(recurrenceFrequency, recurrenceInterval))")
+                           }
+                           
+                           if recurrenceFrequency == .weekly {
+                               WeekdaySelector(selectedDays: $selectedDaysOfWeek)
+                           }
+                           
+                           Picker("Ends", selection: $recurrenceEndOption) {
+                               Text("Never").tag(RecurrenceEndOption.never)
+                               Text("On Date").tag(RecurrenceEndOption.onDate)
+                               Text("After").tag(RecurrenceEndOption.afterOccurrences)
+                           }
+                           
+                           if recurrenceEndOption == .onDate {
+                               DatePicker("End Date", selection: $recurrenceEndDate, displayedComponents: [.date])
+                           } else if recurrenceEndOption == .afterOccurrences {
+                               Stepper(value: $recurrenceOccurrences, in: 1...100) {
+                                   Text("After \(recurrenceOccurrences) occurrences")
+                               }
+                           }
+                       }
+                   }
+               }
+               .navigationTitle(activity == nil ? "Add Activity" : "Edit Activity")
+               .navigationBarTitleDisplayMode(.inline)
+               .toolbar {
+                   ToolbarItem(placement: .navigationBarLeading) {
+                       Button("Cancel") {
+                           presentationMode.wrappedValue.dismiss()
+                       }
+                   }
+                   
+                   ToolbarItem(placement: .navigationBarTrailing) {
+                       Button(activity == nil ? "Add" : "Save") {
+                           if hasTimeConflict {
+                               showingConflictAlert = true
+                           } else {
+                               saveActivity()
+                               presentationMode.wrappedValue.dismiss()
+                           }
+                       }
+                       .disabled(!isValidForm)
+                   }
+               }
+               .onAppear {
+                   // If editing an existing activity, populate the form
+                   if let activity = activity {
+                       title = activity.title
+                       description = activity.description ?? ""
+                       notes = activity.notes ?? ""
+                       startDate = activity.startTime
+                       endDate = activity.endTime
+                       activityType = activity.activityType
+                       activityColor = activity.color
+                       enableNotifications = activity.enableReminders
+                       reminderTime = activity.reminderMinutesBefore
+                       
+                       // Set up recurrence if applicable
+                       if let recurrenceRule = activity.recurrenceRule {
+                           isRecurring = true
+                           recurrenceFrequency = recurrenceRule.frequency
+                           recurrenceInterval = recurrenceRule.interval
+                           
+                           if let daysOfWeek = recurrenceRule.daysOfWeek {
+                               selectedDaysOfWeek = daysOfWeek
+                           }
+                           
+                           if let endDate = recurrenceRule.endDate {
+                               recurrenceEndOption = .onDate
+                               recurrenceEndDate = endDate
+                           } else if let occurrences = recurrenceRule.occurrences {
+                               recurrenceEndOption = .afterOccurrences
+                               recurrenceOccurrences = occurrences
+                           } else {
+                               recurrenceEndOption = .never
+                           }
+                       }
+                   }
+                   
+                   // Initial conflict check
+                   checkForTimeConflicts()
+               }
+               .alert(isPresented: $showingConflictAlert) {
+                   Alert(
+                       title: Text("Time Conflict"),
+                       message: Text("This activity conflicts with another activity on your schedule. Would you like to save it anyway?"),
+                       primaryButton: .default(Text("Save Anyway")) {
+                           saveActivity()
+                           presentationMode.wrappedValue.dismiss()
+                       },
+                       secondaryButton: .cancel()
+                   )
+               }
+           }
+       }
+       
+       private func checkForTimeConflicts() {
+           if let activity = activity {
+               // When editing, exclude the current activity from the check
+               hasTimeConflict = viewModel.checkTimeConflict(start: startDate, end: endDate, excluding: activity.id)
+           } else {
+               // When creating, check against all activities
+               hasTimeConflict = viewModel.checkTimeConflict(start: startDate, end: endDate)
+           }
+       }
+       
+       private func frequencyLabel(_ frequency: RecurrenceRule.Frequency, _ interval: Int) -> String {
+           let plural = interval > 1
+           
+           switch frequency {
+           case .daily:
+               return plural ? "days" : "day"
+           case .weekly:
+               return plural ? "weeks" : "week"
+           case .monthly:
+               return plural ? "months" : "month"
+           case .yearly:
+               return plural ? "years" : "year"
+           }
+       }
+       
+       private func saveActivity() {
+           // Create recurrence rule if needed
+           var recurrenceRule: RecurrenceRule?
+           if isRecurring {
+               var endDate: Date?
+               var occurrences: Int?
+               
+               switch recurrenceEndOption {
+               case .onDate:
+                   endDate = recurrenceEndDate
+               case .afterOccurrences:
+                   occurrences = recurrenceOccurrences
+               case .never:
+                   // Both remain nil
+                   break
+               }
+               
+               recurrenceRule = RecurrenceRule(
+                   frequency: recurrenceFrequency,
+                   interval: recurrenceInterval,
+                   daysOfWeek: recurrenceFrequency == .weekly ? selectedDaysOfWeek : nil,
+                   endDate: endDate,
+                   occurrences: occurrences
+               )
+           }
+           
+           if let activity = activity {
+               // Update existing activity
+               let updatedActivity = ScheduledActivity(
+                   id: activity.id,
+                   title: title,
+                   description: description.isEmpty ? nil : description,
+                   startTime: startDate,
+                   endTime: endDate,
+                   activityType: activityType,
+                   isCompleted: activity.isCompleted,
+                   isRecommended: activity.isRecommended,
+                   relatedRecommendationId: activity.relatedRecommendationId,
+                   color: activityColor,
+                   notes: notes.isEmpty ? nil : notes,
+                   enableReminders: enableNotifications,
+                   reminderMinutesBefore: reminderTime,
+                   recurrenceRule: recurrenceRule,
+                   recurringParentId: activity.recurringParentId
+               )
+               
+               viewModel.updateActivity(updatedActivity)
+           } else {
+               // Create new activity
+               let newActivity = ScheduledActivity(
+                   title: title,
+                   description: description.isEmpty ? nil : description,
+                   startTime: startDate,
+                   endTime: endDate,
+                   activityType: activityType,
+                   color: activityColor,
+                   notes: notes.isEmpty ? nil : notes,
+                   enableReminders: enableNotifications,
+                   reminderMinutesBefore: reminderTime,
+                   recurrenceRule: recurrenceRule
+               )
+               
+               viewModel.addActivity(newActivity)
+           }
+       }
+    }

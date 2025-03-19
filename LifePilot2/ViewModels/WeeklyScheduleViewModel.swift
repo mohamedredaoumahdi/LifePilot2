@@ -42,7 +42,7 @@ class WeeklyScheduleViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var scheduleSubscription: AnyCancellable?
     private var userId: String?
-    private var currentWeekOffset = 0
+    var currentWeekOffset = 0
     
     // Initialize with dependencies
     init(databaseService: FirebaseDatabaseServiceProtocol = FirebaseDatabaseService(),
